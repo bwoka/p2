@@ -7,7 +7,7 @@ import (
 )
 
 type libstore struct {
-	// TODO: implement this!
+	
 }
 
 // NewLibstore creates a new instance of a TribServer's libstore. masterServerHostPort
@@ -35,7 +35,9 @@ type libstore struct {
 // need to create a brand new HTTP handler to serve the requests (the Libstore may
 // simply reuse the TribServer's HTTP handler since the two run in the same process).
 func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libstore, error) {
-	return nil, errors.New("not implemented")
+	libstore:=make(libstore{})
+	rpc.RegisterName("LeaseCallbacks", librpc.Wrap(libstore))
+	return libstore,nil
 }
 
 func (ls *libstore) Get(key string) (string, error) {
