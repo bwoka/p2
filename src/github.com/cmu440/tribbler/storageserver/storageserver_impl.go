@@ -2,14 +2,16 @@ package storageserver
 
 import (
 	"errors"
-
 	"github.com/cmu440/tribbler/rpc/storagerpc"
 )
 
 type storageServer struct {
 	// TODO: implement this!
 	topMap map[string]interface{}
+}
 
+type GetArgs struct {
+	key string
 }
 
 // NewStorageServer creates and starts a new StorageServer. masterServerHostPort
@@ -21,7 +23,8 @@ type storageServer struct {
 // This function should return only once all storage servers have joined the ring,
 // and should return a non-nil error if the storage server could not be started.
 func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID uint32) (StorageServer, error) {
-	return (make(storageServer{topMap:make(map[string]interface{})}),nil)
+	ss := storageServer{topMap: make(map[string]interface{})}
+	return &ss, nil
 }
 
 func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *storagerpc.RegisterReply) error {
@@ -33,64 +36,76 @@ func (ss *storageServer) GetServers(args *storagerpc.GetServersArgs, reply *stor
 }
 
 func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetReply) error {
-	key=args.key
-	split:=Split(key, ":")
-	typ:=split[len(split)-1]
-	if !(len(split)=="2"){
-		return error
-	}
-	if typ=="usrid"{
-		*reply=topMap[args.key]
-	}
-	else if typ=="sublist"{
-		*reply=topMap[args.key]
+	key := args.Key
+	//	split := strings.Split(key, ":")
+	//	typ := split[len(split)-1]
+	//	if !(len(split) == 2) {
+	//		return nil
+	//	}
+	data := ss.topMap[key]
+	if str, ok := data.(string); ok {
+		reply.Value = str
+		return nil
+	} else {
 		return nil
 	}
-	else if typ=="triblist"{
-		*reply=topMap[args.key]
-		return nil
-	}
-	else{
-		subs:=Split(typ,"_")
-		if len(subs)==3 && subs[0]="post"{
-			timestamp:=subs[1]
-			tiebreak:=subs[2]
-			*reply=topMap[args.key]
 
-		}
-	}
+	/*	if typ == "usrid" {
+			*reply = ss.topMap[key]
+		} else if typ == "sublist" {
+			*reply = ss.topMap[key]
+			return nil
+		} else if typ == "triblist" {
+			*reply = ss.topMap[key]
+			return nil
+		} else {
+			subs := strings.Split(typ, "_")
+			if len(subs) == 3 && subs[0] == "post" {
+				timestamp := subs[1]
+				tiebreak := subs[2]
+				*reply = ss.topMap[key]
+
+			}
+		} */
 	return errors.New("not implemented")
 }
 
 func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.DeleteReply) error {
-	Delete(topMap, args.key)
+	delete(ss.topMap, args.Key)
 	return nil
 }
 
 func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.GetListReply) error {
-	*reply=topMap[args.key]
+	data := ss.topMap[args.Key]
+	if strList, ok := data.([]string); ok {
+		reply.Value = strList
+		return nil
+	}
 	return nil
 }
 
 func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	*reply=topMap[args.key]=topMap[args.value]
+	ss.topMap[args.Key] = ss.topMap[args.Value]
 	return nil
 }
 
 func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	lst:=topMap[args.key]
-	topMap[args.key]=lst+args.toAppend
+	lst := ss.topMap[args.Key]
+	if l, ok := lst.([]string); ok {
+		ss.topMap[args.Key] = append(l, args.Value)
+	}
 	return nil
 }
 
 func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-		lst:=topMap[args.key]
-		topMap[args.key]=lst+args.toAppend
-		for i:=0; i<len(lst);i++{
-			if lst[i]==args.toRemove{
-				topMap[args.key]=lst[:i]+lst[i+1:]
+	lst := ss.topMap[args.Key]
+	if l, ok := lst.([]string); ok {
+		for i := 0; i < len(l); i++ {
+			if l[i] == args.Value {
+				ss.topMap[args.Key] = append(l[:i], l[i+1:]...)
 				return nil
 			}
 		}
+	}
 	return errors.New("toRemove not in list")
 }
