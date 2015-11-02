@@ -2,12 +2,23 @@ package libstore
 
 import (
 	"errors"
-
+	"fmt"
+	//	"github.com/cmu440/tribbler/rpc/librpc"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
+	"net/rpc"
+	"time"
 )
 
 type libstore struct {
-	
+	myHostPort string
+	mode       LeaseMode
+	servers    []storagerpc.Node
+	conns      []connection
+}
+
+type connection struct {
+	server storagerpc.Node
+	client *rpc.Client
 }
 
 // NewLibstore creates a new instance of a TribServer's libstore. masterServerHostPort
@@ -35,17 +46,49 @@ type libstore struct {
 // need to create a brand new HTTP handler to serve the requests (the Libstore may
 // simply reuse the TribServer's HTTP handler since the two run in the same process).
 func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libstore, error) {
-	libstore:=make(libstore{})
-	rpc.RegisterName("LeaseCallbacks", librpc.Wrap(libstore))
-	return libstore,nil
+	client, err := rpc.DialHTTP("tcp", masterServerHostPort)
+	if err != nil {
+		return nil, err
+	}
+	var args storagerpc.GetServersArgs
+	var reply storagerpc.GetServersReply
+	var servers []storagerpc.Node
+	for i := 0; i < 5; i++ {
+		client.Call("storageServer.GetServers", args, &reply)
+		if reply.Status == storagerpc.OK {
+			servers = reply.Servers
+			break
+		} else {
+			fmt.Println(fmt.Sprintf("status: %d", reply.Status))
+			time.Sleep(1000 * time.Millisecond)
+			if i == 4 {
+				return nil, errors.New("Couldn't connect to storage server")
+			}
+		}
+	}
+	var connections = make([]connection, len(reply.Servers))
+	connections[0] = connection{server: servers[0], client: client}
+	libstore := libstore{myHostPort: myHostPort, mode: mode,
+		servers: servers, conns: connections}
+	//	rpc.RegisterName("LeaseCallbacks", librpc.Wrap(libstore))
+	return &libstore, nil
 }
 
 func (ls *libstore) Get(key string) (string, error) {
-	return "", errors.New("not implemented")
+	var args storagerpc.GetArgs
+	var reply storagerpc.GetReply
+	args.Key = key
+	ls.conns[0].client.Call("storageServer.Get", args, &reply)
+	return reply.Value, nil
 }
 
 func (ls *libstore) Put(key, value string) error {
-	return errors.New("not implemented")
+	var args storagerpc.PutArgs
+	var reply storagerpc.PutReply
+	args.Key = key
+	args.Value = value
+	ls.conns[0].client.Call("storageServer.Put", args, &reply)
+	return nil
 }
 
 func (ls *libstore) Delete(key string) error {

@@ -2,16 +2,18 @@ package storageserver
 
 import (
 	"errors"
+	"fmt"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
+	"net"
+	"net/http"
+	"net/rpc"
+	"time"
 )
 
 type storageServer struct {
-	// TODO: implement this!
-	topMap map[string]interface{}
-}
-
-type GetArgs struct {
-	key string
+	topMap  map[string]interface{}
+	servers []storagerpc.Node
+	count   int
 }
 
 // NewStorageServer creates and starts a new StorageServer. masterServerHostPort
@@ -23,16 +25,82 @@ type GetArgs struct {
 // This function should return only once all storage servers have joined the ring,
 // and should return a non-nil error if the storage server could not be started.
 func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID uint32) (StorageServer, error) {
-	ss := storageServer{topMap: make(map[string]interface{})}
+
+	serverInfo := storagerpc.Node{HostPort: fmt.Sprintf("localhost:%d", port), NodeID: nodeID}
+	var ss storageServer
+	if masterServerHostPort == "" {
+
+		// Set up server info
+		var servers = make([]storagerpc.Node, numNodes)
+		servers[0] = serverInfo
+		ss = storageServer{topMap: make(map[string]interface{}), servers: servers, count: 1}
+
+		// Start listening for rpc calls from slaves and libstore
+		rpc.RegisterName("storageServer", &ss)
+		rpc.HandleHTTP()
+		l, e := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if e != nil {
+			fmt.Println(e)
+			return nil, errors.New("Master server couldn't start listening")
+		}
+		go http.Serve(l, nil)
+		//		for ss.count < numNodes {
+		//			time.Sleep(1000 * time.Millisecond)
+		//			fmt.Println("waiting for registers")
+		//		}
+	} else {
+		// Try to connect to the at most five times
+		args := storagerpc.RegisterArgs{ServerInfo: serverInfo}
+		master, err := rpc.DialHTTP("tcp", masterServerHostPort)
+		var reply storagerpc.RegisterReply
+		if err != nil {
+			return nil, err
+		}
+		for i := 0; i < 5; i++ {
+			master.Call("storageServer.RegisterServer", args, &reply)
+			fmt.Println(fmt.Sprintf("%d", reply.Status))
+			if reply.Status == storagerpc.OK {
+				ss = storageServer{topMap: make(map[string]interface{}), servers: reply.Servers, count: numNodes}
+				break
+			} else {
+				time.Sleep(1000 * time.Millisecond)
+				if i == 4 {
+					return nil, errors.New("couldn't connect to master")
+				}
+			}
+		}
+	}
+
 	return &ss, nil
 }
 
 func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *storagerpc.RegisterReply) error {
-	return errors.New("not implemented")
+
+	fmt.Println("getting register call")
+	// Need to lock this first so that we don't overwrite
+	ss.servers[ss.count] = args.ServerInfo
+	ss.count++
+	fmt.Println(fmt.Sprintf("count: %d", ss.count))
+	if ss.count == len(ss.servers) {
+		reply.Status = storagerpc.OK
+		reply.Servers = ss.servers
+	} else {
+		reply.Status = storagerpc.NotReady
+		reply.Servers = nil
+	}
+	return nil
 }
 
 func (ss *storageServer) GetServers(args *storagerpc.GetServersArgs, reply *storagerpc.GetServersReply) error {
-	return errors.New("not implemented")
+	fmt.Println("trying to send servers")
+	if ss.count == len(ss.servers) {
+		reply.Status = storagerpc.OK
+		reply.Servers = ss.servers
+		return nil
+	} else {
+		reply.Status = storagerpc.NotReady
+		return nil
+	}
 }
 
 func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetReply) error {
@@ -47,7 +115,7 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 		reply.Value = str
 		return nil
 	} else {
-		return nil
+		return errors.New("bad value")
 	}
 
 	/*	if typ == "usrid" {
