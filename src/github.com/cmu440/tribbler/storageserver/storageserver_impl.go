@@ -7,13 +7,16 @@ import (
 	"net"
 	"net/http"
 	"net/rpc"
+	"sync"
 	"time"
 )
 
 type storageServer struct {
-	topMap  map[string]interface{}
-	servers []storagerpc.Node
-	count   int
+	topMap  map[string]interface{} // Main hash table, stores everything
+	servers []storagerpc.Node      // List of all servers in the ring
+	count   int                    // Number of servers in the ring
+	rwLock  *sync.Mutex            // Lock for any reading and writing to this server,
+	// also used to initially count slave servers
 }
 
 // NewStorageServer creates and starts a new StorageServer. masterServerHostPort
@@ -26,16 +29,19 @@ type storageServer struct {
 // and should return a non-nil error if the storage server could not be started.
 func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID uint32) (StorageServer, error) {
 
+	// Set upt this server's info
 	serverInfo := storagerpc.Node{HostPort: fmt.Sprintf("localhost:%d", port), NodeID: nodeID}
 	var ss storageServer
 	if masterServerHostPort == "" {
 
-		// Set up server info
+		// If this is the master server, set up a list of servers
 		var servers = make([]storagerpc.Node, numNodes)
 		servers[0] = serverInfo
-		ss = storageServer{topMap: make(map[string]interface{}), servers: servers, count: 1}
 
-		// Start listening for rpc calls from slaves and libstore
+		// Create the master server
+		ss = storageServer{topMap: make(map[string]interface{}), servers: servers, count: 1, rwLock: &sync.Mutex{}}
+
+		// Start listening for rpc calls from slaves and libstores
 		rpc.RegisterName("storageServer", &ss)
 		rpc.HandleHTTP()
 		l, e := net.Listen("tcp", fmt.Sprintf(":%d", port))
@@ -44,12 +50,8 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 			return nil, errors.New("Master server couldn't start listening")
 		}
 		go http.Serve(l, nil)
-		//		for ss.count < numNodes {
-		//			time.Sleep(1000 * time.Millisecond)
-		//			fmt.Println("waiting for registers")
-		//		}
 	} else {
-		// Try to connect to the at most five times
+		// Try to connect to the master at most five times
 		args := storagerpc.RegisterArgs{ServerInfo: serverInfo}
 		master, err := rpc.DialHTTP("tcp", masterServerHostPort)
 		var reply storagerpc.RegisterReply
@@ -60,9 +62,11 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 			master.Call("storageServer.RegisterServer", args, &reply)
 			fmt.Println(fmt.Sprintf("%d", reply.Status))
 			if reply.Status == storagerpc.OK {
-				ss = storageServer{topMap: make(map[string]interface{}), servers: reply.Servers, count: numNodes}
+				// All servers are connected, create this slave server
+				ss = storageServer{topMap: make(map[string]interface{}), servers: reply.Servers, count: numNodes, rwLock: &sync.Mutex{}}
 				break
 			} else {
+				// Wait one second, try to connect to master again
 				time.Sleep(1000 * time.Millisecond)
 				if i == 4 {
 					return nil, errors.New("couldn't connect to master")
@@ -76,11 +80,17 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 
 func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *storagerpc.RegisterReply) error {
 
-	fmt.Println("getting register call")
-	// Need to lock this first so that we don't overwrite
+	if ss.count >= len(ss.servers) {
+		return errors.New("Too many servers connected")
+	}
+
+	// Add this server to the list
+	ss.rwLock.Lock()
 	ss.servers[ss.count] = args.ServerInfo
 	ss.count++
-	fmt.Println(fmt.Sprintf("count: %d", ss.count))
+	ss.rwLock.Unlock()
+
+	// If all servers have connected, send the OK and reply with server list
 	if ss.count == len(ss.servers) {
 		reply.Status = storagerpc.OK
 		reply.Servers = ss.servers
@@ -92,7 +102,8 @@ func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *st
 }
 
 func (ss *storageServer) GetServers(args *storagerpc.GetServersArgs, reply *storagerpc.GetServersReply) error {
-	fmt.Println("trying to send servers")
+
+	// Reply with OK and servers only if all have connected
 	if ss.count == len(ss.servers) {
 		reply.Status = storagerpc.OK
 		reply.Servers = ss.servers
@@ -104,82 +115,92 @@ func (ss *storageServer) GetServers(args *storagerpc.GetServersArgs, reply *stor
 }
 
 func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetReply) error {
-	key := args.Key
-	//	split := strings.Split(key, ":")
-	//	typ := split[len(split)-1]
-	//	if !(len(split) == 2) {
-	//		return nil
-	//	}
-	fmt.Println("Getting!")
-	data := ss.topMap[key]
-	fmt.Println(data)
-	if str, ok := data.(string); ok {
-		fmt.Println("Is okay!")
-		reply.Value = str
-		return nil
-	} else {
-		fmt.Println("Get failed")
-		return errors.New("bad value")
-	}
 
-	/*	if typ == "usrid" {
-			*reply = ss.topMap[key]
-		} else if typ == "sublist" {
-			*reply = ss.topMap[key]
-			return nil
-		} else if typ == "triblist" {
-			*reply = ss.topMap[key]
+	key := args.Key
+	if data, found := ss.topMap[key]; found {
+		if str, ok := data.(string); ok {
+			reply.Status = storagerpc.OK
+			reply.Value = str
 			return nil
 		} else {
-			subs := strings.Split(typ, "_")
-			if len(subs) == 3 && subs[0] == "post" {
-				timestamp := subs[1]
-				tiebreak := subs[2]
-				*reply = ss.topMap[key]
-
-			}
-		} */
-	return errors.New("not implemented")
+			return errors.New("bad value")
+		}
+	} else {
+		fmt.Println(key)
+		fmt.Println("not found?  Whatttttttttt?")
+		reply.Status = storagerpc.KeyNotFound
+		return nil
+	}
 }
 
 func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.DeleteReply) error {
-	delete(ss.topMap, args.Key)
+	key := args.Key
+	if _, found := ss.topMap[key]; found {
+		delete(ss.topMap, args.Key)
+		reply.Status = storagerpc.OK
+	} else {
+		reply.Status = storagerpc.KeyNotFound
+	}
 	return nil
 }
 
 func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.GetListReply) error {
-	data := ss.topMap[args.Key]
-	if strList, ok := data.([]string); ok {
-		reply.Value = strList
-		return nil
+	key := args.Key
+	if data, found := ss.topMap[key]; found {
+		if strList, ok := data.([]string); ok {
+			reply.Status = storagerpc.OK
+			reply.Value = strList
+		} else {
+			return errors.New("bad value")
+		}
+	} else {
+		reply.Status = storagerpc.KeyNotFound
 	}
 	return nil
 }
 
 func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	fmt.Println("Putting")
-	ss.topMap[args.Key] = args.Value
-	fmt.Println(fmt.Sprintf("Just put %s: %s", args.Key, ss.topMap[args.Key]))
+	key := args.Key
+	if _, found := ss.topMap[key]; found {
+		reply.Status = storagerpc.ItemExists
+	} else {
+		ss.topMap[args.Key] = args.Value
+		reply.Status = storagerpc.OK
+	}
 	return nil
 }
 
 func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	lst := ss.topMap[args.Key]
-	if l, ok := lst.([]string); ok {
-		ss.topMap[args.Key] = append(l, args.Value)
+	key := args.Key
+	if lst, found := ss.topMap[key]; found {
+		if l, ok := lst.([]string); ok {
+			reply.Status = storagerpc.OK
+			ss.topMap[args.Key] = append(l, args.Value)
+		}
+	} else {
+		reply.Status = storagerpc.KeyNotFound
 	}
 	return nil
 }
 
 func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	lst := ss.topMap[args.Key]
-	if l, ok := lst.([]string); ok {
-		for i := 0; i < len(l); i++ {
-			if l[i] == args.Value {
-				ss.topMap[args.Key] = append(l[:i], l[i+1:]...)
-				return nil
+	key := args.Key
+	if lst, found := ss.topMap[key]; found {
+		if l, ok := lst.([]string); ok {
+			for i := 0; i < len(l); i++ {
+				if l[i] == args.Value {
+					reply.Status = storagerpc.OK
+					ss.topMap[args.Key] = append(l[:i], l[i+1:]...)
+					return nil
+				}
 			}
+			reply.Status = storagerpc.ItemNotFound
+			return nil
+		} else {
+			return errors.New("List to remove from is wrong type")
 		}
+	} else {
+		reply.Status = storagerpc.KeyNotFound
+		return nil
 	}
-	return errors.New("toRemove not in list")
 }

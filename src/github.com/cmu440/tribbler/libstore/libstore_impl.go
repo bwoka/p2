@@ -79,7 +79,11 @@ func (ls *libstore) Get(key string) (string, error) {
 	var reply storagerpc.GetReply
 	args.Key = key
 	ls.conns[0].client.Call("storageServer.Get", args, &reply)
-	return reply.Value, nil
+	if reply.Status == storagerpc.OK {
+		return reply.Value, nil
+	} else {
+		return "", errors.New("Key does not exist")
+	}
 }
 
 func (ls *libstore) Put(key, value string) error {
@@ -88,23 +92,61 @@ func (ls *libstore) Put(key, value string) error {
 	args.Key = key
 	args.Value = value
 	ls.conns[0].client.Call("storageServer.Put", args, &reply)
-	return nil
+	if reply.Status == storagerpc.OK {
+		return nil
+	} else {
+		return errors.New("Item already exists")
+	}
 }
 
 func (ls *libstore) Delete(key string) error {
-	return errors.New("not implemented")
+	var args storagerpc.DeleteArgs
+	var reply storagerpc.DeleteReply
+	args.Key = key
+	ls.conns[0].client.Call("storageServer.Delete", args, &reply)
+	if reply.Status == storagerpc.OK {
+		return nil
+	} else {
+		return errors.New("Key does not exist")
+	}
 }
 
 func (ls *libstore) GetList(key string) ([]string, error) {
-	return nil, errors.New("not implemented")
+	var args storagerpc.GetArgs
+	var reply storagerpc.GetListReply
+	args.Key = key
+	ls.conns[0].client.Call("storageServer.GetList", args, &reply)
+	if reply.Status == storagerpc.OK {
+		return reply.Value, nil
+	} else {
+		return nil, errors.New("Key does not exist")
+	}
 }
 
 func (ls *libstore) RemoveFromList(key, removeItem string) error {
-	return errors.New("not implemented")
+	var args storagerpc.PutArgs
+	var reply storagerpc.PutReply
+	args.Key = key
+	ls.conns[0].client.Call("storageServer.GetList", args, &reply)
+	if reply.Status == storagerpc.OK {
+		return nil
+	} else if reply.Status == storagerpc.KeyNotFound {
+		return errors.New("Key does not exist")
+	} else {
+		return errors.New("Item does not exist")
+	}
 }
 
 func (ls *libstore) AppendToList(key, newItem string) error {
-	return errors.New("not implemented")
+	var args storagerpc.PutArgs
+	var reply storagerpc.PutReply
+	args.Key = key
+	ls.conns[0].client.Call("storageServer.GetList", args, &reply)
+	if reply.Status == storagerpc.OK {
+		return nil
+	} else {
+		return errors.New("Key not found")
+	}
 }
 
 func (ls *libstore) RevokeLease(args *storagerpc.RevokeLeaseArgs, reply *storagerpc.RevokeLeaseReply) error {
