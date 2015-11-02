@@ -110,11 +110,15 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 	//	if !(len(split) == 2) {
 	//		return nil
 	//	}
+	fmt.Println("Getting!")
 	data := ss.topMap[key]
+	fmt.Println(data)
 	if str, ok := data.(string); ok {
+		fmt.Println("Is okay!")
 		reply.Value = str
 		return nil
 	} else {
+		fmt.Println("Get failed")
 		return errors.New("bad value")
 	}
 
@@ -153,7 +157,9 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 }
 
 func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	ss.topMap[args.Key] = ss.topMap[args.Value]
+	fmt.Println("Putting")
+	ss.topMap[args.Key] = args.Value
+	fmt.Println(fmt.Sprintf("Just put %s: %s", args.Key, ss.topMap[args.Key]))
 	return nil
 }
 
