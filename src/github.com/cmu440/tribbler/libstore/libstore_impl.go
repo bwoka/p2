@@ -2,7 +2,7 @@ package libstore
 
 import (
 	"errors"
-	//"github.com/cmu440/tribbler/rpc/librpc"
+	"github.com/cmu440/tribbler/rpc/librpc"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
 	"net/rpc"
 	"time"
@@ -46,6 +46,9 @@ type connection struct {
 // simply reuse the TribServer's HTTP handler since the two run in the same process).
 func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libstore, error) {
 
+	ls := new(libstore)
+	rpc.RegisterName("LeaseCallbacks", librpc.Wrap(ls))
+
 	// Connect to master storage server
 	client, err := rpc.DialHTTP("tcp", masterServerHostPort)
 	if err != nil {
@@ -73,10 +76,11 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	// Create libstore and save the connection to the master server
 	var connections = make([]connection, len(reply.Servers))
 	connections[0] = connection{server: servers[0], client: client}
-	libstore := libstore{myHostPort: myHostPort, mode: mode,
-		servers: servers, conns: connections}
-	// rpc.RegisterName("LeaseCallbacks", librpc.Wrap(libstore))
-	return &libstore, nil
+	ls.myHostPort = myHostPort
+	ls.mode = mode
+	ls.servers = servers
+	ls.conns = connections
+	return ls, nil
 }
 
 func (ls *libstore) Get(key string) (string, error) {

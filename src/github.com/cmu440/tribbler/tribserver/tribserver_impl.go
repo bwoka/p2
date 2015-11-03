@@ -1,6 +1,7 @@
 package tribserver
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/cmu440/tribbler/libstore"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/rpc"
+	"time"
 )
 
 type tribServer struct {
@@ -23,22 +25,24 @@ type tribServer struct {
 // For hints on how to properly setup RPC, see the rpc/tribrpc package.
 func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) {
 
+	ts := new(tribServer)
+
 	// Create the libstore for this server
 	ls, err := libstore.NewLibstore(masterServerHostPort, myHostPort, libstore.Never)
 	if err != nil {
 		return nil, errors.New("Couldn't start libstore for Tribserver")
 	}
-	ts := tribServer{ls: ls}
+	ts.ls = ls
 
 	// Start listening for connections from TribClients
-	rpc.RegisterName("TribServer", &ts)
+	rpc.RegisterName("TribServer", tribrpc.Wrap(ts))
 	rpc.HandleHTTP()
 	l, e := net.Listen("tcp", myHostPort)
 	if e != nil {
 		return nil, errors.New("Tribserver couldn't start listening")
 	}
 	go http.Serve(l, nil)
-	return &ts, nil
+	return ts, nil
 
 	// Get rid of this.  I didn't want to keep commenting out fmt for testing when I didn't use it
 	fmt.Println("this is here so I don't throw an error for not using fmt")
@@ -144,6 +148,34 @@ func (ts *tribServer) PostTribble(args *tribrpc.PostTribbleArgs, reply *tribrpc.
 		reply.Status = tribrpc.NoSuchUser
 		return nil
 	}
+
+	postkey := util.FormatPostKey(userkey, time.Now().UnixNano())
+	// make sure postkey is unique
+	for {
+		if _, err := ts.ls.Get(postkey); err == nil {
+			postkey = util.FormatPostKey(userkey, time.Now().UnixNano())
+			continue
+		}
+		break
+	}
+
+	// Create the Tribble
+	tribble := tribrpc.Tribble{UserID: userkey, Posted: time.Now(),
+		Contents: args.Contents}
+	value, err := json.Marshal(tribble)
+	if err != nil {
+		return errors.New("Couldn't create Tribble")
+	}
+
+	// Hash the Tribble and add the postkey to the user's TribList
+	if ep := ts.ls.Put(postkey, string(value)); ep != nil {
+		return errors.New("Couldn't post Tribble")
+	}
+	if ea := ts.ls.AppendToList(util.FormatTribListKey(userkey), postkey); ea != nil {
+		return errors.New("Couldn't add TribbleID to user list")
+	}
+	reply.PostKey = postkey
+	reply.Status = tribrpc.OK
 	return nil
 }
 
@@ -155,6 +187,20 @@ func (ts *tribServer) DeleteTribble(args *tribrpc.DeleteTribbleArgs, reply *trib
 		reply.Status = tribrpc.NoSuchUser
 		return nil
 	}
+
+	postkey := args.PostKey
+
+	// For some reason, this is not giving an error for postkeys that shouldn't exist
+	if err := ts.ls.Delete(postkey); err != nil {
+		reply.Status = tribrpc.NoSuchPost
+		return nil
+	}
+	// This IS catching the error for postkeys that shouldn't exist
+	if err := ts.ls.RemoveFromList(util.FormatTribListKey(userkey), postkey); err != nil {
+		reply.Status = tribrpc.NoSuchPost
+		return nil
+	}
+	reply.Status = tribrpc.OK
 	return nil
 }
 

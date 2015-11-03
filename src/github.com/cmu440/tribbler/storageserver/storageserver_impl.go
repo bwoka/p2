@@ -139,6 +139,9 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 }
 
 func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.DeleteReply) error {
+	ss.rwLock.Lock()
+	defer ss.rwLock.Unlock()
+
 	key := args.Key
 	if _, found := ss.topMap[key]; found {
 		delete(ss.topMap, args.Key)
@@ -168,6 +171,9 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 }
 
 func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
+	ss.rwLock.Lock()
+	defer ss.rwLock.Unlock()
+
 	key := args.Key
 	reply.Status = storagerpc.OK
 	ss.topMap[key] = args.Value
@@ -175,6 +181,9 @@ func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutRepl
 }
 
 func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
+	ss.rwLock.Lock()
+	defer ss.rwLock.Unlock()
+
 	key := args.Key
 	if lst, found := ss.topMap[key]; found {
 		if l, ok := lst.([]string); ok {
@@ -203,6 +212,9 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 }
 
 func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
+	ss.rwLock.Lock()
+	defer ss.rwLock.Unlock()
+
 	key := args.Key
 	if lst, found := ss.topMap[key]; found {
 		if l, ok := lst.([]string); ok {
