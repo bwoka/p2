@@ -2,8 +2,7 @@ package libstore
 
 import (
 	"errors"
-	"fmt"
-	//	"github.com/cmu440/tribbler/rpc/librpc"
+	//"github.com/cmu440/tribbler/rpc/librpc"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
 	"net/rpc"
 	"time"
@@ -12,8 +11,8 @@ import (
 type libstore struct {
 	myHostPort string
 	mode       LeaseMode
-	servers    []storagerpc.Node
-	conns      []connection
+	servers    []storagerpc.Node // The list of servers
+	conns      []connection      // List of ongoing connections to servers
 }
 
 type connection struct {
@@ -46,6 +45,8 @@ type connection struct {
 // need to create a brand new HTTP handler to serve the requests (the Libstore may
 // simply reuse the TribServer's HTTP handler since the two run in the same process).
 func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libstore, error) {
+
+	// Connect to master storage server
 	client, err := rpc.DialHTTP("tcp", masterServerHostPort)
 	if err != nil {
 		return nil, err
@@ -53,31 +54,35 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	var args storagerpc.GetServersArgs
 	var reply storagerpc.GetServersReply
 	var servers []storagerpc.Node
+
+	// Try five times to request the list of storage servers from the master
 	for i := 0; i < 5; i++ {
 		client.Call("StorageServer.GetServers", args, &reply)
 		if reply.Status == storagerpc.OK {
+			// Success!  Store list of servers
 			servers = reply.Servers
 			break
 		} else {
-			fmt.Println(fmt.Sprintf("status: %d", reply.Status))
+			// Failure, sleep one second and try again
 			time.Sleep(1000 * time.Millisecond)
 			if i == 4 {
 				return nil, errors.New("Couldn't connect to storage server")
 			}
 		}
 	}
+	// Create libstore and save the connection to the master server
 	var connections = make([]connection, len(reply.Servers))
 	connections[0] = connection{server: servers[0], client: client}
 	libstore := libstore{myHostPort: myHostPort, mode: mode,
 		servers: servers, conns: connections}
-	//	rpc.RegisterName("LeaseCallbacks", librpc.Wrap(libstore))
+	// rpc.RegisterName("LeaseCallbacks", librpc.Wrap(libstore))
 	return &libstore, nil
 }
 
 func (ls *libstore) Get(key string) (string, error) {
-	var args storagerpc.GetArgs
+
+	args := &storagerpc.GetArgs{Key: key}
 	var reply storagerpc.GetReply
-	args.Key = key
 	ls.conns[0].client.Call("StorageServer.Get", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return reply.Value, nil
@@ -87,22 +92,22 @@ func (ls *libstore) Get(key string) (string, error) {
 }
 
 func (ls *libstore) Put(key, value string) error {
-	var args storagerpc.PutArgs
+
+	args := &storagerpc.PutArgs{Key: key, Value: value}
 	var reply storagerpc.PutReply
-	args.Key = key
-	args.Value = value
 	ls.conns[0].client.Call("StorageServer.Put", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return nil
 	} else {
-		return errors.New("Item already exists")
+		// Shouldn't happen
+		return errors.New("Error on Put")
 	}
 }
 
 func (ls *libstore) Delete(key string) error {
-	var args storagerpc.DeleteArgs
+
+	args := &storagerpc.DeleteArgs{Key: key}
 	var reply storagerpc.DeleteReply
-	args.Key = key
 	ls.conns[0].client.Call("StorageServer.Delete", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return nil
@@ -112,9 +117,8 @@ func (ls *libstore) Delete(key string) error {
 }
 
 func (ls *libstore) GetList(key string) ([]string, error) {
-	var args storagerpc.GetArgs
+	args := &storagerpc.GetArgs{Key: key}
 	var reply storagerpc.GetListReply
-	args.Key = key
 	ls.conns[0].client.Call("StorageServer.GetList", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return reply.Value, nil
@@ -124,10 +128,8 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 }
 
 func (ls *libstore) RemoveFromList(key, removeItem string) error {
-	var args storagerpc.PutArgs
+	args := &storagerpc.PutArgs{Key: key, Value: removeItem}
 	var reply storagerpc.PutReply
-	args.Key = key
-	args.Value = removeItem
 	ls.conns[0].client.Call("StorageServer.RemoveFromList", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return nil
@@ -139,15 +141,13 @@ func (ls *libstore) RemoveFromList(key, removeItem string) error {
 }
 
 func (ls *libstore) AppendToList(key, newItem string) error {
-	var args storagerpc.PutArgs
+	args := &storagerpc.PutArgs{Key: key, Value: newItem}
 	var reply storagerpc.PutReply
-	args.Key = key
-	args.Value = newItem
 	ls.conns[0].client.Call("StorageServer.AppendToList", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return nil
 	} else {
-		return errors.New("Key not found")
+		return errors.New("Item exists")
 	}
 }
 

@@ -39,7 +39,8 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		servers[0] = serverInfo
 
 		// Create the master server
-		ss = storageServer{topMap: make(map[string]interface{}), servers: servers, count: 1, rwLock: &sync.Mutex{}}
+		ss = storageServer{topMap: make(map[string]interface{}), servers: servers,
+			count: 1, rwLock: &sync.Mutex{}}
 
 		// Start listening for rpc calls from slaves and libstores
 		rpc.RegisterName("StorageServer", &ss)
@@ -63,7 +64,8 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 			fmt.Println(fmt.Sprintf("%d", reply.Status))
 			if reply.Status == storagerpc.OK {
 				// All servers are connected, create this slave server
-				ss = storageServer{topMap: make(map[string]interface{}), servers: reply.Servers, count: numNodes, rwLock: &sync.Mutex{}}
+				ss = storageServer{topMap: make(map[string]interface{}),
+					servers: reply.Servers, count: numNodes, rwLock: &sync.Mutex{}}
 				break
 			} else {
 				// Wait one second, try to connect to master again
@@ -80,6 +82,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 
 func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *storagerpc.RegisterReply) error {
 
+	// Check if all servers have connected
 	if ss.count >= len(ss.servers) {
 		return errors.New("Too many servers connected")
 	}
@@ -119,14 +122,17 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 	key := args.Key
 	if data, found := ss.topMap[key]; found {
 		if str, ok := data.(string); ok {
+
+			// key was found and had valid string data
 			reply.Status = storagerpc.OK
 			reply.Value = str
 			return nil
 		} else {
+
+			// key value is corrupted, not a string
 			return errors.New("bad value")
 		}
 	} else {
-		fmt.Println(key)
 		reply.Status = storagerpc.KeyNotFound
 		return nil
 	}
@@ -147,9 +153,11 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 	key := args.Key
 	if data, found := ss.topMap[key]; found {
 		if strList, ok := data.([]string); ok {
+			// key was found, had valid []string data
 			reply.Status = storagerpc.OK
 			reply.Value = strList
 		} else {
+			// key was found with string data, return empty list (This shouldn't happen)
 			reply.Status = storagerpc.OK
 			reply.Value = make([]string, 0)
 		}
@@ -172,14 +180,20 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 		if l, ok := lst.([]string); ok {
 			for i := 0; i < len(l); i++ {
 				if l[i] == args.Value {
+					// value was already in list
 					reply.Status = storagerpc.ItemExists
 					return nil
 				}
 			}
+			// value was not in list, append to the end
 			reply.Status = storagerpc.OK
 			ss.topMap[key] = append(l, args.Value)
+		} else {
+			// list was corrputed, shouldn't happen
+			return errors.New("List to remove from is wrong type")
 		}
 	} else {
+		// This key hasn't had a list made yet, make new list and insert value
 		l := make([]string, 1)
 		l[0] = args.Value
 		ss.topMap[key] = l
@@ -194,14 +208,17 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 		if l, ok := lst.([]string); ok {
 			for i := 0; i < len(l); i++ {
 				if l[i] == args.Value {
+					// found item in list, remove it and return
 					reply.Status = storagerpc.OK
 					ss.topMap[key] = append(l[:i], l[i+1:]...)
 					return nil
 				}
 			}
+			// item was not in the list
 			reply.Status = storagerpc.ItemNotFound
 			return nil
 		} else {
+			// list was corrupted, shouldn't happen
 			return errors.New("List to remove from is wrong type")
 		}
 	} else {
