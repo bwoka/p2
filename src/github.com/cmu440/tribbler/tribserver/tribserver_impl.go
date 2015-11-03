@@ -149,18 +149,18 @@ func (ts *tribServer) PostTribble(args *tribrpc.PostTribbleArgs, reply *tribrpc.
 		return nil
 	}
 
-	postkey := util.FormatPostKey(userkey, time.Now().UnixNano())
+	postkey := util.FormatPostKey(args.UserID, time.Now().UnixNano())
 	// make sure postkey is unique
 	for {
 		if _, err := ts.ls.Get(postkey); err == nil {
-			postkey = util.FormatPostKey(userkey, time.Now().UnixNano())
+			postkey = util.FormatPostKey(args.UserID, time.Now().UnixNano())
 			continue
 		}
 		break
 	}
 
 	// Create the Tribble
-	tribble := tribrpc.Tribble{UserID: userkey, Posted: time.Now(),
+	tribble := tribrpc.Tribble{UserID: args.UserID, Posted: time.Now(),
 		Contents: args.Contents}
 	value, err := json.Marshal(tribble)
 	if err != nil {
@@ -171,7 +171,7 @@ func (ts *tribServer) PostTribble(args *tribrpc.PostTribbleArgs, reply *tribrpc.
 	if ep := ts.ls.Put(postkey, string(value)); ep != nil {
 		return errors.New("Couldn't post Tribble")
 	}
-	if ea := ts.ls.AppendToList(util.FormatTribListKey(userkey), postkey); ea != nil {
+	if ea := ts.ls.AppendToList(util.FormatTribListKey(args.UserID), postkey); ea != nil {
 		return errors.New("Couldn't add TribbleID to user list")
 	}
 	reply.PostKey = postkey
@@ -190,13 +190,13 @@ func (ts *tribServer) DeleteTribble(args *tribrpc.DeleteTribbleArgs, reply *trib
 
 	postkey := args.PostKey
 
-	// For some reason, this is not giving an error for postkeys that shouldn't exist
+	// Make sure the Tribble exists
 	if err := ts.ls.Delete(postkey); err != nil {
 		reply.Status = tribrpc.NoSuchPost
 		return nil
 	}
-	// This IS catching the error for postkeys that shouldn't exist
-	if err := ts.ls.RemoveFromList(util.FormatTribListKey(userkey), postkey); err != nil {
+	// Make sure the Tribble is in this user's list
+	if err := ts.ls.RemoveFromList(util.FormatTribListKey(args.UserID), postkey); err != nil {
 		reply.Status = tribrpc.NoSuchPost
 		return nil
 	}
@@ -212,6 +212,35 @@ func (ts *tribServer) GetTribbles(args *tribrpc.GetTribblesArgs, reply *tribrpc.
 		reply.Status = tribrpc.NoSuchUser
 		return nil
 	}
+
+	// Store list of marshalled Tribbles in lst.  Return empty list if user had no subscriptions.
+	var lst []string
+	var err error
+	if lst, err = ts.ls.GetList(util.FormatTribListKey(args.UserID)); err != nil {
+		reply.Status = tribrpc.OK
+		reply.Tribbles = make([]tribrpc.Tribble, 0)
+		return nil
+	}
+
+	// Find out how many posts we will return
+	var recentPosts []string
+	if len(lst) > 100 {
+		recentPosts = lst[len(lst)-100:]
+	} else {
+		recentPosts = lst
+	}
+
+	// Loop through this users Tribbles in reverse order and grab up to 100
+	tribbles := make([]tribrpc.Tribble, len(recentPosts))
+	var mtribble string
+	var tribble tribrpc.Tribble
+	for i := 0; i < len(tribbles); i++ {
+		mtribble, _ = ts.ls.Get(recentPosts[len(tribbles)-1-i])
+		json.Unmarshal([]byte(mtribble), &tribble)
+		tribbles[i] = tribble
+	}
+	reply.Status = tribrpc.OK
+	reply.Tribbles = tribbles
 	return nil
 }
 
@@ -223,5 +252,93 @@ func (ts *tribServer) GetTribblesBySubscription(args *tribrpc.GetTribblesArgs, r
 		reply.Status = tribrpc.NoSuchUser
 		return nil
 	}
+
+	// Get list of subscriptions.  return empty list if user has no subscriptions.
+	var subs []string
+	var esubs error
+	if subs, esubs = ts.ls.GetList(util.FormatSubListKey(args.UserID)); esubs != nil {
+		reply.Status = tribrpc.OK
+		reply.Tribbles = make([]tribrpc.Tribble, 0)
+		return nil
+	}
+
+	// Set up variables to get allTribs, defined below
+	allTribs := make([][]tribrpc.Tribble, len(subs))
+	var err error
+	var lst []string
+	var recentPosts []string
+	var mtribble string
+	var tribble tribrpc.Tribble
+	totalTribs := 0
+
+	// AllTribs will be a two dimensional array of the last 100 Tribbles from each subscribed user.  Repeating logic from GetTribbles
+	for i := 0; i < len(subs); i++ {
+		if lst, err = ts.ls.GetList(util.FormatTribListKey(subs[i])); err != nil {
+			// This user has no posts, just add empty list of Tribbles
+			allTribs[i] = make([]tribrpc.Tribble, 0)
+			continue
+		}
+
+		// Get the total number of Tribbles from this user, maximum of 100
+		if len(lst) > 100 {
+			recentPosts = lst[len(lst)-100:]
+		} else {
+			recentPosts = lst
+		}
+		tribbles := make([]tribrpc.Tribble, len(recentPosts))
+
+		// Grab up to 100 most recent Tribbles from this user
+		for j := 0; j < len(tribbles); j++ {
+			mtribble, _ = ts.ls.Get(recentPosts[len(tribbles)-1-j])
+			json.Unmarshal([]byte(mtribble), &tribble)
+			tribbles[j] = tribble
+		}
+		allTribs[i] = tribbles
+		totalTribs += len(tribbles)
+
+	}
+
+	// Set totalTribs to be 100 if we saw at least 100 Tribbles, otherwise the number we saw
+	var numTribbles int
+	if totalTribs > 100 {
+		numTribbles = 100
+	} else {
+		numTribbles = totalTribs
+	}
+
+	finalTribbles := make([]tribrpc.Tribble, numTribbles)
+	indexes := make([]int, len(subs))
+	for z := 0; z < len(indexes); z++ {
+		indexes[z] = 0
+	}
+
+	// Loop numTribbles times and grab the most recent tribble each time
+	var minIndex int
+	indexes = indexes
+	for k := 0; k < numTribbles; k++ {
+		minIndex = -1
+		for check := 0; check < len(indexes); check++ {
+			if indexes[check] < len(allTribs[check]) {
+				if minIndex == -1 {
+					minIndex = check
+				}
+				if cmpLessTribble(allTribs[check][indexes[check]],
+					allTribs[minIndex][indexes[minIndex]]) {
+					minIndex = check
+				}
+			}
+		}
+		finalTribbles[k] = allTribs[minIndex][indexes[minIndex]]
+		indexes[minIndex] += 1
+	}
+	reply.Status = tribrpc.OK
+	reply.Tribbles = finalTribbles
 	return nil
+}
+
+// Returns true if t1 is a more recent Tribble than t2
+func cmpLessTribble(t1, t2 tribrpc.Tribble) bool {
+	time1 := t1.Posted
+	time2 := t2.Posted
+	return time1.UnixNano() > time2.UnixNano()
 }
