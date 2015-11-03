@@ -127,7 +127,8 @@ func (ls *libstore) RemoveFromList(key, removeItem string) error {
 	var args storagerpc.PutArgs
 	var reply storagerpc.PutReply
 	args.Key = key
-	ls.conns[0].client.Call("StorageServer.GetList", args, &reply)
+	args.Value = removeItem
+	ls.conns[0].client.Call("StorageServer.RemoveFromList", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return nil
 	} else if reply.Status == storagerpc.KeyNotFound {
@@ -141,7 +142,8 @@ func (ls *libstore) AppendToList(key, newItem string) error {
 	var args storagerpc.PutArgs
 	var reply storagerpc.PutReply
 	args.Key = key
-	ls.conns[0].client.Call("StorageServer.GetList", args, &reply)
+	args.Value = newItem
+	ls.conns[0].client.Call("StorageServer.AppendToList", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return nil
 	} else {

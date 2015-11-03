@@ -150,7 +150,8 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 			reply.Status = storagerpc.OK
 			reply.Value = strList
 		} else {
-			return errors.New("bad value")
+			reply.Status = storagerpc.OK
+			reply.Value = make([]string, 0)
 		}
 	} else {
 		reply.Status = storagerpc.KeyNotFound
@@ -160,12 +161,8 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 
 func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
 	key := args.Key
-	if _, found := ss.topMap[key]; found {
-		reply.Status = storagerpc.ItemExists
-	} else {
-		ss.topMap[args.Key] = args.Value
-		reply.Status = storagerpc.OK
-	}
+	reply.Status = storagerpc.OK
+	ss.topMap[key] = args.Value
 	return nil
 }
 
@@ -173,11 +170,20 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 	key := args.Key
 	if lst, found := ss.topMap[key]; found {
 		if l, ok := lst.([]string); ok {
+			for i := 0; i < len(l); i++ {
+				if l[i] == args.Value {
+					reply.Status = storagerpc.ItemExists
+					return nil
+				}
+			}
 			reply.Status = storagerpc.OK
 			ss.topMap[key] = append(l, args.Value)
 		}
 	} else {
-		reply.Status = storagerpc.KeyNotFound
+		l := make([]string, 1)
+		l[0] = args.Value
+		ss.topMap[key] = l
+		reply.Status = storagerpc.OK
 	}
 	return nil
 }
