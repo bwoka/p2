@@ -42,7 +42,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		ss = storageServer{topMap: make(map[string]interface{}), servers: servers, count: 1, rwLock: &sync.Mutex{}}
 
 		// Start listening for rpc calls from slaves and libstores
-		rpc.RegisterName("storageServer", &ss)
+		rpc.RegisterName("StorageServer", &ss)
 		rpc.HandleHTTP()
 		l, e := net.Listen("tcp", fmt.Sprintf(":%d", port))
 		if e != nil {
@@ -59,7 +59,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 			return nil, err
 		}
 		for i := 0; i < 5; i++ {
-			master.Call("storageServer.RegisterServer", args, &reply)
+			master.Call("StorageServer.RegisterServer", args, &reply)
 			fmt.Println(fmt.Sprintf("%d", reply.Status))
 			if reply.Status == storagerpc.OK {
 				// All servers are connected, create this slave server
@@ -127,7 +127,6 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 		}
 	} else {
 		fmt.Println(key)
-		fmt.Println("not found?  Whatttttttttt?")
 		reply.Status = storagerpc.KeyNotFound
 		return nil
 	}
@@ -175,7 +174,7 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 	if lst, found := ss.topMap[key]; found {
 		if l, ok := lst.([]string); ok {
 			reply.Status = storagerpc.OK
-			ss.topMap[args.Key] = append(l, args.Value)
+			ss.topMap[key] = append(l, args.Value)
 		}
 	} else {
 		reply.Status = storagerpc.KeyNotFound
@@ -190,7 +189,7 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 			for i := 0; i < len(l); i++ {
 				if l[i] == args.Value {
 					reply.Status = storagerpc.OK
-					ss.topMap[args.Key] = append(l[:i], l[i+1:]...)
+					ss.topMap[key] = append(l[:i], l[i+1:]...)
 					return nil
 				}
 			}

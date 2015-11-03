@@ -54,7 +54,7 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	var reply storagerpc.GetServersReply
 	var servers []storagerpc.Node
 	for i := 0; i < 5; i++ {
-		client.Call("storageServer.GetServers", args, &reply)
+		client.Call("StorageServer.GetServers", args, &reply)
 		if reply.Status == storagerpc.OK {
 			servers = reply.Servers
 			break
@@ -78,7 +78,7 @@ func (ls *libstore) Get(key string) (string, error) {
 	var args storagerpc.GetArgs
 	var reply storagerpc.GetReply
 	args.Key = key
-	ls.conns[0].client.Call("storageServer.Get", args, &reply)
+	ls.conns[0].client.Call("StorageServer.Get", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return reply.Value, nil
 	} else {
@@ -91,7 +91,7 @@ func (ls *libstore) Put(key, value string) error {
 	var reply storagerpc.PutReply
 	args.Key = key
 	args.Value = value
-	ls.conns[0].client.Call("storageServer.Put", args, &reply)
+	ls.conns[0].client.Call("StorageServer.Put", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return nil
 	} else {
@@ -103,7 +103,7 @@ func (ls *libstore) Delete(key string) error {
 	var args storagerpc.DeleteArgs
 	var reply storagerpc.DeleteReply
 	args.Key = key
-	ls.conns[0].client.Call("storageServer.Delete", args, &reply)
+	ls.conns[0].client.Call("StorageServer.Delete", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return nil
 	} else {
@@ -115,7 +115,7 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 	var args storagerpc.GetArgs
 	var reply storagerpc.GetListReply
 	args.Key = key
-	ls.conns[0].client.Call("storageServer.GetList", args, &reply)
+	ls.conns[0].client.Call("StorageServer.GetList", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return reply.Value, nil
 	} else {
@@ -127,7 +127,7 @@ func (ls *libstore) RemoveFromList(key, removeItem string) error {
 	var args storagerpc.PutArgs
 	var reply storagerpc.PutReply
 	args.Key = key
-	ls.conns[0].client.Call("storageServer.GetList", args, &reply)
+	ls.conns[0].client.Call("StorageServer.GetList", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return nil
 	} else if reply.Status == storagerpc.KeyNotFound {
@@ -141,7 +141,7 @@ func (ls *libstore) AppendToList(key, newItem string) error {
 	var args storagerpc.PutArgs
 	var reply storagerpc.PutReply
 	args.Key = key
-	ls.conns[0].client.Call("storageServer.GetList", args, &reply)
+	ls.conns[0].client.Call("StorageServer.GetList", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return nil
 	} else {
