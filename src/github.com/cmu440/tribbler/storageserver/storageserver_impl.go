@@ -62,7 +62,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		if err != nil {
 			return nil, err
 		}
-		for i := 0; i < 5; i++ {
+		for i := 0; i <= 5; i++ {
 			master.Call("StorageServer.RegisterServer", args, &reply)
 			fmt.Println(fmt.Sprintf("%d", reply.Status))
 			if reply.Status == storagerpc.OK {
@@ -72,10 +72,10 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 				break
 			} else {
 				// Wait one second, try to connect to master again
-				time.Sleep(1000 * time.Millisecond)
-				if i == 4 {
+				if i == 5 {
 					return nil, errors.New("couldn't connect to master")
 				}
+				time.Sleep(1000 * time.Millisecond)
 			}
 		}
 	}
@@ -83,7 +83,8 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 	rpc.RegisterName("StorageServer", &ss)
 	rpc.HandleHTTP()
 	fmt.Println("%d", port)
-	l, e := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	// l, e := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	l, e := net.Listen("tcp", serverInfo.HostPort)
 	if e != nil {
 		fmt.Println(e)
 		return nil, errors.New("Storage server couldn't start listening")
@@ -113,11 +114,11 @@ func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *st
 
 	// Add this server to the list
 	if seen == false {
-		ss.rwLock.Lock()
+		//		ss.rwLock.Lock()
 		ss.servers[ss.count] = args.ServerInfo
 		ss.count++
 		fmt.Println("count: ", ss.count)
-		ss.rwLock.Unlock()
+		//		ss.rwLock.Unlock()
 	}
 	// If all servers have connected, send the OK and reply with server list
 	if ss.count == len(ss.servers) {
