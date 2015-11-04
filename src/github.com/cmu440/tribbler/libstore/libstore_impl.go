@@ -2,6 +2,7 @@ package libstore
 
 import (
 	"errors"
+	"fmt"
 	"github.com/cmu440/tribbler/rpc/librpc"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
 	"net/rpc"
@@ -61,6 +62,7 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	// Try five times to request the list of storage servers from the master
 	for i := 0; i < 5; i++ {
 		client.Call("StorageServer.GetServers", args, &reply)
+		fmt.Println(reply.Status)
 		if reply.Status == storagerpc.OK {
 			// Success!  Store list of servers
 			servers = reply.Servers

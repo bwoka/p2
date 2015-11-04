@@ -32,6 +32,8 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 	// Set upt this server's info
 	serverInfo := storagerpc.Node{HostPort: fmt.Sprintf("localhost:%d", port), NodeID: nodeID}
 	var ss storageServer
+
+	fmt.Println("starting server", masterServerHostPort, port)
 	if masterServerHostPort == "" {
 
 		// If this is the master server, set up a list of servers
@@ -43,14 +45,15 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 			count: 1, rwLock: &sync.Mutex{}}
 
 		// Start listening for rpc calls from slaves and libstores
-		rpc.RegisterName("StorageServer", &ss)
-		rpc.HandleHTTP()
-		l, e := net.Listen("tcp", fmt.Sprintf(":%d", port))
-		if e != nil {
-			fmt.Println(e)
-			return nil, errors.New("Master server couldn't start listening")
-		}
-		go http.Serve(l, nil)
+		/*		rpc.RegisterName("StorageServer", &ss)
+				rpc.HandleHTTP()
+				l, e := net.Listen("tcp", fmt.Sprintf(":%d", port))
+				if e != nil {
+					fmt.Println(e)
+					return nil, errors.New("Master server couldn't start listening")
+				}
+				go http.Serve(l, nil)
+		*/
 	} else {
 		// Try to connect to the master at most five times
 		args := storagerpc.RegisterArgs{ServerInfo: serverInfo}
@@ -77,6 +80,18 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		}
 	}
 
+	rpc.RegisterName("StorageServer", &ss)
+	rpc.HandleHTTP()
+	fmt.Println("%d", port)
+	l, e := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if e != nil {
+		fmt.Println(e)
+		return nil, errors.New("Storage server couldn't start listening")
+	}
+	go http.Serve(l, nil)
+
+	fmt.Println("Ending server")
+
 	return &ss, nil
 }
 
@@ -87,12 +102,23 @@ func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *st
 		return errors.New("Too many servers connected")
 	}
 
-	// Add this server to the list
-	ss.rwLock.Lock()
-	ss.servers[ss.count] = args.ServerInfo
-	ss.count++
-	ss.rwLock.Unlock()
+	serverID := args.ServerInfo.NodeID
+	seen := false
 
+	for i := 0; i < ss.count; i++ {
+		if ss.servers[i].NodeID == serverID {
+			seen = true
+		}
+	}
+
+	// Add this server to the list
+	if seen == false {
+		ss.rwLock.Lock()
+		ss.servers[ss.count] = args.ServerInfo
+		ss.count++
+		fmt.Println("count: ", ss.count)
+		ss.rwLock.Unlock()
+	}
 	// If all servers have connected, send the OK and reply with server list
 	if ss.count == len(ss.servers) {
 		reply.Status = storagerpc.OK
