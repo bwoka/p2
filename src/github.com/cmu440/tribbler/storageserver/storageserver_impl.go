@@ -33,7 +33,6 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 	serverInfo := storagerpc.Node{HostPort: fmt.Sprintf("localhost:%d", port), NodeID: nodeID}
 	var ss storageServer
 
-	fmt.Println("starting server", masterServerHostPort, port)
 	if masterServerHostPort == "" {
 
 		// If this is the master server, set up a list of servers
@@ -44,16 +43,6 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		ss = storageServer{topMap: make(map[string]interface{}), servers: servers,
 			count: 1, rwLock: &sync.Mutex{}}
 
-		// Start listening for rpc calls from slaves and libstores
-		/*		rpc.RegisterName("StorageServer", &ss)
-				rpc.HandleHTTP()
-				l, e := net.Listen("tcp", fmt.Sprintf(":%d", port))
-				if e != nil {
-					fmt.Println(e)
-					return nil, errors.New("Master server couldn't start listening")
-				}
-				go http.Serve(l, nil)
-		*/
 	} else {
 		// Try to connect to the master at most five times
 		args := storagerpc.RegisterArgs{ServerInfo: serverInfo}
@@ -62,9 +51,8 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		if err != nil {
 			return nil, err
 		}
-		for i := 0; i <= 5; i++ {
+		for i := 1; i <= 5; i++ {
 			master.Call("StorageServer.RegisterServer", args, &reply)
-			fmt.Println(fmt.Sprintf("%d", reply.Status))
 			if reply.Status == storagerpc.OK {
 				// All servers are connected, create this slave server
 				ss = storageServer{topMap: make(map[string]interface{}),
@@ -75,33 +63,25 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 				if i == 5 {
 					return nil, errors.New("couldn't connect to master")
 				}
-				time.Sleep(1000 * time.Millisecond)
+				time.Sleep(time.Second)
 			}
 		}
 	}
 
+	// Start listening for connections from other storageServers and libstores
 	rpc.RegisterName("StorageServer", &ss)
 	rpc.HandleHTTP()
-	fmt.Println("%d", port)
-	// l, e := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	//l, e := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	l, e := net.Listen("tcp", serverInfo.HostPort)
 	if e != nil {
-		fmt.Println(e)
 		return nil, errors.New("Storage server couldn't start listening")
 	}
 	go http.Serve(l, nil)
-
-	fmt.Println("Ending server")
 
 	return &ss, nil
 }
 
 func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *storagerpc.RegisterReply) error {
-
-	// Check if all servers have connected
-	if ss.count >= len(ss.servers) {
-		return errors.New("Too many servers connected")
-	}
 
 	serverID := args.ServerInfo.NodeID
 	seen := false
@@ -114,11 +94,10 @@ func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *st
 
 	// Add this server to the list
 	if seen == false {
-		//		ss.rwLock.Lock()
+		ss.rwLock.Lock()
 		ss.servers[ss.count] = args.ServerInfo
 		ss.count++
-		fmt.Println("count: ", ss.count)
-		//		ss.rwLock.Unlock()
+		ss.rwLock.Unlock()
 	}
 	// If all servers have connected, send the OK and reply with server list
 	if ss.count == len(ss.servers) {

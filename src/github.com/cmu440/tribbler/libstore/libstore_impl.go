@@ -13,12 +13,7 @@ type libstore struct {
 	myHostPort string
 	mode       LeaseMode
 	servers    []storagerpc.Node // The list of servers
-	conns      []connection      // List of ongoing connections to servers
-}
-
-type connection struct {
-	server storagerpc.Node
-	client *rpc.Client
+	clients    []*rpc.Client     // List of ongoing connections to servers
 }
 
 // NewLibstore creates a new instance of a TribServer's libstore. masterServerHostPort
@@ -60,7 +55,7 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	var servers []storagerpc.Node
 
 	// Try five times to request the list of storage servers from the master
-	for i := 0; i <= 4; i++ {
+	for i := 1; i <= 5; i++ {
 		client.Call("StorageServer.GetServers", args, &reply)
 		fmt.Println(reply.Status)
 		if reply.Status == storagerpc.OK {
@@ -69,19 +64,19 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 			break
 		} else {
 			// Failure, sleep one second and try again
-			if i == 4 {
+			if i == 5 {
 				return nil, errors.New("Couldn't connect to storage server")
 			}
-			time.Sleep(1000 * time.Millisecond)
+			time.Sleep(time.Second)
 		}
 	}
 	// Create libstore and save the connection to the master server
-	var connections = make([]connection, len(reply.Servers))
-	connections[0] = connection{server: servers[0], client: client}
+	var clients = make([]*rpc.Client, len(reply.Servers))
+	clients[0] = client
 	ls.myHostPort = myHostPort
 	ls.mode = mode
 	ls.servers = servers
-	ls.conns = connections
+	ls.clients = clients
 	return ls, nil
 }
 
@@ -89,7 +84,8 @@ func (ls *libstore) Get(key string) (string, error) {
 
 	args := &storagerpc.GetArgs{Key: key}
 	var reply storagerpc.GetReply
-	ls.conns[0].client.Call("StorageServer.Get", args, &reply)
+	client := getConnection(ls, getStorageServerIndex(ls, key))
+	client.Call("StorageServer.Get", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return reply.Value, nil
 	} else {
@@ -101,7 +97,8 @@ func (ls *libstore) Put(key, value string) error {
 
 	args := &storagerpc.PutArgs{Key: key, Value: value}
 	var reply storagerpc.PutReply
-	ls.conns[0].client.Call("StorageServer.Put", args, &reply)
+	client := getConnection(ls, getStorageServerIndex(ls, key))
+	client.Call("StorageServer.Put", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return nil
 	} else {
@@ -114,7 +111,8 @@ func (ls *libstore) Delete(key string) error {
 
 	args := &storagerpc.DeleteArgs{Key: key}
 	var reply storagerpc.DeleteReply
-	ls.conns[0].client.Call("StorageServer.Delete", args, &reply)
+	client := getConnection(ls, getStorageServerIndex(ls, key))
+	client.Call("StorageServer.Delete", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return nil
 	} else {
@@ -125,7 +123,8 @@ func (ls *libstore) Delete(key string) error {
 func (ls *libstore) GetList(key string) ([]string, error) {
 	args := &storagerpc.GetArgs{Key: key}
 	var reply storagerpc.GetListReply
-	ls.conns[0].client.Call("StorageServer.GetList", args, &reply)
+	client := getConnection(ls, getStorageServerIndex(ls, key))
+	client.Call("StorageServer.GetList", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return reply.Value, nil
 	} else {
@@ -136,7 +135,8 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 func (ls *libstore) RemoveFromList(key, removeItem string) error {
 	args := &storagerpc.PutArgs{Key: key, Value: removeItem}
 	var reply storagerpc.PutReply
-	ls.conns[0].client.Call("StorageServer.RemoveFromList", args, &reply)
+	client := getConnection(ls, getStorageServerIndex(ls, key))
+	client.Call("StorageServer.RemoveFromList", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return nil
 	} else if reply.Status == storagerpc.KeyNotFound {
@@ -149,7 +149,9 @@ func (ls *libstore) RemoveFromList(key, removeItem string) error {
 func (ls *libstore) AppendToList(key, newItem string) error {
 	args := &storagerpc.PutArgs{Key: key, Value: newItem}
 	var reply storagerpc.PutReply
-	ls.conns[0].client.Call("StorageServer.AppendToList", args, &reply)
+	serverIndex := getStorageServerIndex(ls, key)
+	client := getConnection(ls, serverIndex)
+	client.Call("StorageServer.AppendToList", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return nil
 	} else {
@@ -159,4 +161,35 @@ func (ls *libstore) AppendToList(key, newItem string) error {
 
 func (ls *libstore) RevokeLease(args *storagerpc.RevokeLeaseArgs, reply *storagerpc.RevokeLeaseReply) error {
 	return errors.New("not implemented")
+}
+
+func getStorageServerIndex(ls *libstore, key string) int {
+	nextIndex := -1
+	minIndex := -1
+	hash := StoreHash(key)
+	for i := 0; i < len(ls.servers); i++ {
+		server := ls.servers[i]
+		loc := server.NodeID
+		if (loc > hash) && ((nextIndex == -1) || (loc < ls.servers[nextIndex].NodeID)) {
+			nextIndex = i
+		}
+		if (minIndex == -1) || (ls.servers[i].NodeID < ls.servers[minIndex].NodeID) {
+			minIndex = i
+		}
+	}
+	if nextIndex == -1 {
+		nextIndex = minIndex
+	}
+	return nextIndex
+}
+
+func getConnection(ls *libstore, serverIndex int) *rpc.Client {
+	if ls.clients[serverIndex] == nil {
+		client, err := rpc.DialHTTP("tcp", ls.servers[serverIndex].HostPort)
+		if err != nil {
+			return nil
+		}
+		ls.clients[serverIndex] = client
+	}
+	return ls.clients[serverIndex]
 }
