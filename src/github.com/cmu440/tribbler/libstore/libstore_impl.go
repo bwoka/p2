@@ -57,7 +57,6 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	// Try five times to request the list of storage servers from the master
 	for i := 1; i <= 5; i++ {
 		client.Call("StorageServer.GetServers", args, &reply)
-		fmt.Println(reply.Status)
 		if reply.Status == storagerpc.OK {
 			// Success!  Store list of servers
 			servers = reply.Servers
@@ -72,12 +71,24 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	}
 	// Create libstore and save the connection to the master server
 	var clients = make([]*rpc.Client, len(reply.Servers))
-	clients[0] = client
+
+	// WRONG!  StorageServer does not assume servers[0] is master
+	//clients[0] = client
+	for j := 0; j < len(servers); j++ {
+		if servers[j].HostPort == masterServerHostPort {
+			clients[j] = client
+			break
+		}
+	}
 	ls.myHostPort = myHostPort
 	ls.mode = mode
 	ls.servers = servers
 	ls.clients = clients
 	return ls, nil
+
+	// So it won't yell at me for fmt
+	fmt.Println(1)
+	return nil, nil
 }
 
 func (ls *libstore) Get(key string) (string, error) {
@@ -149,8 +160,7 @@ func (ls *libstore) RemoveFromList(key, removeItem string) error {
 func (ls *libstore) AppendToList(key, newItem string) error {
 	args := &storagerpc.PutArgs{Key: key, Value: newItem}
 	var reply storagerpc.PutReply
-	serverIndex := getStorageServerIndex(ls, key)
-	client := getConnection(ls, serverIndex)
+	client := getConnection(ls, getStorageServerIndex(ls, key))
 	client.Call("StorageServer.AppendToList", args, &reply)
 	if reply.Status == storagerpc.OK {
 		return nil
@@ -164,19 +174,25 @@ func (ls *libstore) RevokeLease(args *storagerpc.RevokeLeaseArgs, reply *storage
 }
 
 func getStorageServerIndex(ls *libstore, key string) int {
+
+	// nextIndex is the index of the correct storageserver
 	nextIndex := -1
+	// minIndex is the index of the ss with minimum nodeID
 	minIndex := -1
 	hash := StoreHash(key)
 	for i := 0; i < len(ls.servers); i++ {
 		server := ls.servers[i]
 		loc := server.NodeID
-		if (loc > hash) && ((nextIndex == -1) || (loc < ls.servers[nextIndex].NodeID)) {
+		// If we found a new best server index
+		if (loc >= hash) && ((nextIndex == -1) || (loc < ls.servers[nextIndex].NodeID)) {
 			nextIndex = i
 		}
-		if (minIndex == -1) || (ls.servers[i].NodeID < ls.servers[minIndex].NodeID) {
+		// If we found a new minimum
+		if (minIndex == -1) || (loc < ls.servers[minIndex].NodeID) {
 			minIndex = i
 		}
 	}
+	// If we never found anything with a greater nodeID than the hash, return minimum
 	if nextIndex == -1 {
 		nextIndex = minIndex
 	}
@@ -184,6 +200,7 @@ func getStorageServerIndex(ls *libstore, key string) int {
 }
 
 func getConnection(ls *libstore, serverIndex int) *rpc.Client {
+	// Open a connection to this storage server if necessary
 	if ls.clients[serverIndex] == nil {
 		client, err := rpc.DialHTTP("tcp", ls.servers[serverIndex].HostPort)
 		if err != nil {

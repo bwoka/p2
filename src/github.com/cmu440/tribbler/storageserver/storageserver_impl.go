@@ -3,6 +3,7 @@ package storageserver
 import (
 	"errors"
 	"fmt"
+	"github.com/cmu440/tribbler/libstore"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
 	"net"
 	"net/http"
@@ -13,9 +14,10 @@ import (
 
 type storageServer struct {
 	topMap  map[string]interface{} // Main hash table, stores everything
-	servers []storagerpc.Node      // List of all servers in the ring
-	count   int                    // Number of servers in the ring
-	rwLock  *sync.Mutex            // Lock for any reading and writing to this server,
+	nodeID  uint32
+	servers []storagerpc.Node // List of all servers in the ring
+	count   int               // Number of servers in the ring
+	rwLock  *sync.Mutex       // Lock for any reading and writing to this server,
 	// also used to initially count slave servers
 }
 
@@ -40,8 +42,8 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		servers[0] = serverInfo
 
 		// Create the master server
-		ss = storageServer{topMap: make(map[string]interface{}), servers: servers,
-			count: 1, rwLock: &sync.Mutex{}}
+		ss = storageServer{topMap: make(map[string]interface{}), nodeID: nodeID,
+			servers: servers, count: 1, rwLock: &sync.Mutex{}}
 
 	} else {
 		// Try to connect to the master at most five times
@@ -55,7 +57,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 			master.Call("StorageServer.RegisterServer", args, &reply)
 			if reply.Status == storagerpc.OK {
 				// All servers are connected, create this slave server
-				ss = storageServer{topMap: make(map[string]interface{}),
+				ss = storageServer{topMap: make(map[string]interface{}), nodeID: nodeID,
 					servers: reply.Servers, count: numNodes, rwLock: &sync.Mutex{}}
 				break
 			} else {
@@ -71,7 +73,6 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 	// Start listening for connections from other storageServers and libstores
 	rpc.RegisterName("StorageServer", &ss)
 	rpc.HandleHTTP()
-	//l, e := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	l, e := net.Listen("tcp", serverInfo.HostPort)
 	if e != nil {
 		return nil, errors.New("Storage server couldn't start listening")
@@ -126,6 +127,11 @@ func (ss *storageServer) GetServers(args *storagerpc.GetServersArgs, reply *stor
 func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetReply) error {
 
 	key := args.Key
+	if rightStorageServer(ss, key) == false {
+		reply.Status = storagerpc.WrongServer
+		return nil
+	}
+
 	if data, found := ss.topMap[key]; found {
 		if str, ok := data.(string); ok {
 
@@ -149,6 +155,11 @@ func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.D
 	defer ss.rwLock.Unlock()
 
 	key := args.Key
+	if rightStorageServer(ss, key) == false {
+		reply.Status = storagerpc.WrongServer
+		return nil
+	}
+
 	if _, found := ss.topMap[key]; found {
 		delete(ss.topMap, args.Key)
 		reply.Status = storagerpc.OK
@@ -160,6 +171,11 @@ func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.D
 
 func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.GetListReply) error {
 	key := args.Key
+	if rightStorageServer(ss, key) == false {
+		reply.Status = storagerpc.WrongServer
+		return nil
+	}
+
 	if data, found := ss.topMap[key]; found {
 		if strList, ok := data.([]string); ok {
 			// key was found, had valid []string data
@@ -181,6 +197,11 @@ func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutRepl
 	defer ss.rwLock.Unlock()
 
 	key := args.Key
+	if rightStorageServer(ss, key) == false {
+		reply.Status = storagerpc.WrongServer
+		return nil
+	}
+
 	reply.Status = storagerpc.OK
 	ss.topMap[key] = args.Value
 	return nil
@@ -191,6 +212,11 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 	defer ss.rwLock.Unlock()
 
 	key := args.Key
+	if rightStorageServer(ss, key) == false {
+		reply.Status = storagerpc.WrongServer
+		return nil
+	}
+
 	if lst, found := ss.topMap[key]; found {
 		if l, ok := lst.([]string); ok {
 			for i := 0; i < len(l); i++ {
@@ -222,6 +248,11 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 	defer ss.rwLock.Unlock()
 
 	key := args.Key
+	if rightStorageServer(ss, key) == false {
+		reply.Status = storagerpc.WrongServer
+		return nil
+	}
+
 	if lst, found := ss.topMap[key]; found {
 		if l, ok := lst.([]string); ok {
 			for i := 0; i < len(l); i++ {
@@ -243,4 +274,24 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 		reply.Status = storagerpc.KeyNotFound
 		return nil
 	}
+}
+
+func rightStorageServer(ss *storageServer, key string) bool {
+	nextIndex := -1
+	minIndex := -1
+	hash := libstore.StoreHash(key)
+	for i := 0; i < len(ss.servers); i++ {
+		server := ss.servers[i]
+		loc := server.NodeID
+		if (loc >= hash) && ((nextIndex == -1) || (loc < ss.servers[nextIndex].NodeID)) {
+			nextIndex = i
+		}
+		if (minIndex == -1) || (loc < ss.servers[minIndex].NodeID) {
+			minIndex = i
+		}
+	}
+	if nextIndex == -1 {
+		nextIndex = minIndex
+	}
+	return ss.nodeID == ss.servers[nextIndex].NodeID
 }

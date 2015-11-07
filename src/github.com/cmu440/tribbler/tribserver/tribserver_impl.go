@@ -28,11 +28,9 @@ func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) 
 	ts := new(tribServer)
 
 	// Create the libstore for this server
-	fmt.Println("before libstore")
 	ls, err := libstore.NewLibstore(masterServerHostPort, myHostPort, libstore.Never)
-	fmt.Println("after libstore")
 	if err != nil {
-		return nil, errors.New("Couldn't start libstore for Tribserver")
+		//		return nil, errors.New("Couldn't start libstore for Tribserver")
 	}
 	ts.ls = ls
 
