@@ -30,7 +30,8 @@ func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) 
 	// Create the libstore for this server
 	ls, err := libstore.NewLibstore(masterServerHostPort, myHostPort, libstore.Never)
 	if err != nil {
-		//		return nil, errors.New("Couldn't start libstore for Tribserver")
+		fmt.Println("Failed to create libstore")
+		return nil, errors.New("Couldn't start libstore for Tribserver")
 	}
 	ts.ls = ls
 
@@ -39,6 +40,7 @@ func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) 
 	rpc.HandleHTTP()
 	l, e := net.Listen("tcp", myHostPort)
 	if e != nil {
+		fmt.Println("Failed to listen with Tribserver")
 		return nil, errors.New("Tribserver couldn't start listening")
 	}
 	go http.Serve(l, nil)
@@ -262,75 +264,124 @@ func (ts *tribServer) GetTribblesBySubscription(args *tribrpc.GetTribblesArgs, r
 		return nil
 	}
 
-	// Set up variables to get allTribs, defined below
-	allTribs := make([][]tribrpc.Tribble, len(subs))
-	var err error
-	var lst []string
-	var recentPosts []string
-	var mtribble string
-	var tribble tribrpc.Tribble
-	totalTribs := 0
+	numTribbles := 0
 
-	// AllTribs will be a two dimensional array of the last 100 Tribbles from each subscribed user.  Repeating logic from GetTribbles
+	tribIDs := make([][]string, len(subs))
 	for i := 0; i < len(subs); i++ {
-		if lst, err = ts.ls.GetList(util.FormatTribListKey(subs[i])); err != nil {
-			// This user has no posts, just add empty list of Tribbles
-			allTribs[i] = make([]tribrpc.Tribble, 0)
-			continue
+		if lst, err := ts.ls.GetList(util.FormatTribListKey(subs[i])); err == nil {
+			tribIDs[i] = lst
+			numTribbles += len(lst)
 		}
-
-		// Get the total number of Tribbles from this user, maximum of 100
-		if len(lst) > 100 {
-			recentPosts = lst[len(lst)-100:]
-		} else {
-			recentPosts = lst
-		}
-		tribbles := make([]tribrpc.Tribble, len(recentPosts))
-
-		// Grab up to 100 most recent Tribbles from this user
-		for j := 0; j < len(tribbles); j++ {
-			mtribble, _ = ts.ls.Get(recentPosts[len(tribbles)-1-j])
-			json.Unmarshal([]byte(mtribble), &tribble)
-			tribbles[j] = tribble
-		}
-		allTribs[i] = tribbles
-		totalTribs += len(tribbles)
-
 	}
 
-	// Set totalTribs to be 100 if we saw at least 100 Tribbles, otherwise the number we saw
-	var numTribbles int
-	if totalTribs > 100 {
+	lastTribs := make([]tribrpc.Tribble, len(subs))
+	index := make([]int, len(subs))
+	for z := 0; z < len(index); z++ {
+		index[z] = 0
+	}
+
+	if numTribbles > 100 {
 		numTribbles = 100
-	} else {
-		numTribbles = totalTribs
 	}
 
 	finalTribbles := make([]tribrpc.Tribble, numTribbles)
-	indexes := make([]int, len(subs))
-	for z := 0; z < len(indexes); z++ {
-		indexes[z] = 0
+	var mtribble string
+	var tribble tribrpc.Tribble
+	valid := make([]bool, len(lastTribs))
+	for v := 0; v < len(valid); v++ {
+		valid[v] = false
 	}
-
-	// Loop numTribbles times and grab the most recent tribble each time
-	var minIndex int
-	indexes = indexes
-	for k := 0; k < numTribbles; k++ {
-		minIndex = -1
-		for check := 0; check < len(indexes); check++ {
-			if indexes[check] < len(allTribs[check]) {
-				if minIndex == -1 {
-					minIndex = check
+	for j := 0; j < numTribbles; j++ {
+		minIndex := -1
+		for check := 0; check < len(lastTribs); check++ {
+			if index[check] < len(tribIDs[check]) {
+				if valid[check] == false {
+					mtribble, _ = ts.ls.Get(tribIDs[check][len(tribIDs[check])-1-index[check]])
+					json.Unmarshal([]byte(mtribble), &tribble)
+					lastTribs[check] = tribble
+					valid[check] = true
 				}
-				if cmpLessTribble(allTribs[check][indexes[check]],
-					allTribs[minIndex][indexes[minIndex]]) {
+				if minIndex == -1 || cmpLessTribble(lastTribs[check], lastTribs[minIndex]) {
 					minIndex = check
 				}
 			}
 		}
-		finalTribbles[k] = allTribs[minIndex][indexes[minIndex]]
-		indexes[minIndex] += 1
+		copyTribble := lastTribs[minIndex]
+		finalTribbles[j] = copyTribble
+		valid[minIndex] = false
+		index[minIndex] += 1
+
 	}
+
+	// Set up variables to get allTribs, defined below
+	/*	allTribs := make([][]tribrpc.Tribble, len(subs))
+		var err error
+		var lst []string
+		var recentPosts []string
+		var mtribble string
+		var tribble tribrpc.Tribble
+		totalTribs := 0
+
+		// AllTribs will be a two dimensional array of the last 100 Tribbles from each subscribed user.  Repeating logic from GetTribbles
+		for i := 0; i < len(subs); i++ {
+			if lst, err = ts.ls.GetList(util.FormatTribListKey(subs[i])); err != nil {
+				// This user has no posts, just add empty list of Tribbles
+				allTribs[i] = make([]tribrpc.Tribble, 0)
+				continue
+			}
+
+			// Get the total number of Tribbles from this user, maximum of 100
+			if len(lst) > 100 {
+				recentPosts = lst[len(lst)-100:]
+			} else {
+				recentPosts = lst
+			}
+			tribbles := make([]tribrpc.Tribble, len(recentPosts))
+
+			// Grab up to 100 most recent Tribbles from this user
+			for j := 0; j < len(tribbles); j++ {
+				mtribble, _ = ts.ls.Get(recentPosts[len(tribbles)-1-j])
+				json.Unmarshal([]byte(mtribble), &tribble)
+				tribbles[j] = tribble
+			}
+			allTribs[i] = tribbles
+			totalTribs += len(tribbles)
+
+		}
+
+		// Set totalTribs to be 100 if we saw at least 100 Tribbles, otherwise the number we saw
+		var numTribbles int
+		if totalTribs > 100 {
+			numTribbles = 100
+		} else {
+			numTribbles = totalTribs
+		}
+
+		finalTribbles := make([]tribrpc.Tribble, numTribbles)
+		indexes := make([]int, len(subs))
+		for z := 0; z < len(indexes); z++ {
+			indexes[z] = 0
+		}
+
+		// Loop numTribbles times and grab the most recent tribble each time
+		var minIndex int
+		indexes = indexes
+		for k := 0; k < numTribbles; k++ {
+			minIndex = -1
+			for check := 0; check < len(indexes); check++ {
+				if indexes[check] < len(allTribs[check]) {
+					if minIndex == -1 {
+						minIndex = check
+					}
+					if cmpLessTribble(allTribs[check][indexes[check]],
+						allTribs[minIndex][indexes[minIndex]]) {
+						minIndex = check
+					}
+				}
+			}
+			finalTribbles[k] = allTribs[minIndex][indexes[minIndex]]
+			indexes[minIndex] += 1
+		} */
 	reply.Status = tribrpc.OK
 	reply.Tribbles = finalTribbles
 	return nil

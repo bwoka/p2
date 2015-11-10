@@ -45,10 +45,19 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	ls := new(libstore)
 	rpc.RegisterName("LeaseCallbacks", librpc.Wrap(ls))
 
+	var client *rpc.Client
+	var err error
 	// Connect to master storage server
-	client, err := rpc.DialHTTP("tcp", masterServerHostPort)
-	if err != nil {
-		return nil, err
+	for try := 1; try <= 5; try++ {
+
+		client, err = rpc.DialHTTP("tcp", masterServerHostPort)
+		if err == nil {
+			break
+		}
+		if try == 5 {
+			return nil, err
+		}
+		time.Sleep(time.Millisecond * 250)
 	}
 	var args storagerpc.GetServersArgs
 	var reply storagerpc.GetServersReply
@@ -66,7 +75,7 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 			if i == 5 {
 				return nil, errors.New("Couldn't connect to storage server")
 			}
-			time.Sleep(time.Second)
+			time.Sleep(time.Millisecond * 250)
 		}
 	}
 	// Create libstore and save the connection to the master server
