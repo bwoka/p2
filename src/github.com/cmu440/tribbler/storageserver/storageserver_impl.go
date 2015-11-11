@@ -13,12 +13,12 @@ import (
 )
 
 type storageServer struct {
-	topMap   map[string]interface{} // Main hash table, stores everything
-	nodeID   uint32
-	servers  []storagerpc.Node // List of all servers in the ring
-	count    int               // Number of servers in the ring
-	dataLock *sync.Mutex       // Lock for any reading and writing to this server,
-	listLock *sync.Mutex
+	topMap    map[string]interface{} // Main hash table, stores everything
+	nodeID    uint32
+	servers   []storagerpc.Node // List of all servers in the ring
+	count     int               // Number of servers in the ring
+	countLock sync.Mutex
+	keyLocks  map[string]chan int
 	// also used to initially count slave servers
 }
 
@@ -44,7 +44,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 
 		// Create the master server
 		ss = storageServer{topMap: make(map[string]interface{}), nodeID: nodeID,
-			servers: servers, count: 1, dataLock: &sync.Mutex{}, listLock: &sync.Mutex{}}
+			servers: servers, count: 1, countLock: sync.Mutex{}, keyLocks: make(map[string]chan int)}
 
 	} else {
 		// Try to connect to the master at most five times
@@ -60,21 +60,21 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 			if try == 5 {
 				return nil, err
 			}
-			time.Sleep(time.Millisecond * 250)
+			time.Sleep(time.Millisecond * 20)
 		}
 		for i := 1; i <= 5; i++ {
 			master.Call("StorageServer.RegisterServer", args, &reply)
 			if reply.Status == storagerpc.OK {
 				// All servers are connected, create this slave server
 				ss = storageServer{topMap: make(map[string]interface{}), nodeID: nodeID,
-					servers: reply.Servers, count: numNodes, dataLock: &sync.Mutex{}, listLock: &sync.Mutex{}}
+					servers: reply.Servers, count: numNodes, countLock: sync.Mutex{}, keyLocks: make(map[string]chan int)}
 				break
 			}
 			// Wait one second, try to connect to master again
 			if i == 5 {
 				return nil, errors.New("couldn't connect to master")
 			}
-			time.Sleep(time.Millisecond * 250)
+			time.Sleep(time.Millisecond * 20)
 
 		}
 	}
@@ -104,10 +104,10 @@ func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *st
 
 	// Add this server to the list
 	if seen == false {
-		ss.dataLock.Lock()
+		ss.countLock.Lock()
 		ss.servers[ss.count] = args.ServerInfo
 		ss.count++
-		ss.dataLock.Unlock()
+		ss.countLock.Unlock()
 	}
 	// If all servers have connected, send the OK and reply with server list
 	if ss.count == len(ss.servers) {
@@ -164,18 +164,22 @@ func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.D
 	key := args.Key
 	if rightStorageServer(ss, key) == false {
 		reply.Status = storagerpc.WrongServer
+
 		return nil
+	}
+	if _, found := ss.keyLocks[key]; found == false {
+		ss.keyLocks[key] = make(chan int, 1)
+	} else {
+		<-ss.keyLocks[key]
 	}
 
 	if _, found := ss.topMap[key]; found {
-		ss.dataLock.Lock()
-		defer ss.dataLock.Unlock()
-
-		delete(ss.topMap, args.Key)
+		delete(ss.topMap, key)
 		reply.Status = storagerpc.OK
 	} else {
 		reply.Status = storagerpc.KeyNotFound
 	}
+	ss.keyLocks[key] <- 1
 	return nil
 }
 
@@ -207,34 +211,48 @@ func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutRepl
 	key := args.Key
 	if rightStorageServer(ss, key) == false {
 		reply.Status = storagerpc.WrongServer
+
 		return nil
 	}
 
-	reply.Status = storagerpc.OK
-	ss.dataLock.Lock()
-	defer ss.dataLock.Unlock()
+	if _, found := ss.keyLocks[key]; found == false {
+		ss.keyLocks[key] = make(chan int, 1)
+	} else {
+		<-ss.keyLocks[key]
+	}
 
+	reply.Status = storagerpc.OK
 	ss.topMap[key] = args.Value
+	ss.keyLocks[key] <- 1
 	return nil
 }
 
 func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
 
 	key := args.Key
+
 	if rightStorageServer(ss, key) == false {
 		reply.Status = storagerpc.WrongServer
+		ss.keyLocks[key] <- 1
+
 		return nil
+	}
+
+	if _, found := ss.keyLocks[key]; found == false {
+		ss.keyLocks[key] = make(chan int, 1)
+	} else {
+		<-ss.keyLocks[key]
 	}
 
 	if lst, found := ss.topMap[key]; found {
 		if l, ok := lst.([]string); ok {
-			ss.listLock.Lock()
-			defer ss.listLock.Unlock()
 
 			for i := 0; i < len(l); i++ {
 				if l[i] == args.Value {
 					// value was already in list
 					reply.Status = storagerpc.ItemExists
+					ss.keyLocks[key] <- 1
+
 					return nil
 				}
 			}
@@ -245,50 +263,65 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 			ss.topMap[key] = append(l, args.Value)
 		} else {
 			// list was corrputed, shouldn't happen
+			ss.keyLocks[key] <- 1
+
 			return errors.New("List to remove from is wrong type")
 		}
 	} else {
 		// This key hasn't had a list made yet, make new list and insert value
 		l := make([]string, 1)
 		l[0] = args.Value
-		ss.listLock.Lock()
-		defer ss.listLock.Unlock()
 
 		ss.topMap[key] = l
 		reply.Status = storagerpc.OK
 	}
+	ss.keyLocks[key] <- 1
+
 	return nil
 }
 
 func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
 	key := args.Key
+
 	if rightStorageServer(ss, key) == false {
 		reply.Status = storagerpc.WrongServer
 		return nil
 	}
 
+	if _, found := ss.keyLocks[key]; found == false {
+		ss.keyLocks[key] = make(chan int, 1)
+	} else {
+		<-ss.keyLocks[key]
+	}
+
 	if lst, found := ss.topMap[key]; found {
 		if l, ok := lst.([]string); ok {
-			ss.listLock.Lock()
-			defer ss.listLock.Unlock()
 
 			for i := 0; i < len(l); i++ {
 				if l[i] == args.Value {
 					// found item in list, remove it and return
 					reply.Status = storagerpc.OK
 					ss.topMap[key] = append(l[:i], l[i+1:]...)
+					ss.keyLocks[key] <- 1
+
 					return nil
 				}
 			}
 			// item was not in the list
 			reply.Status = storagerpc.ItemNotFound
+			ss.keyLocks[key] <- 1
+
 			return nil
 		} else {
 			// list was corrupted, shouldn't happen
+			ss.keyLocks[key] <- 1
+
 			return errors.New("List to remove from is wrong type")
 		}
 	} else {
 		reply.Status = storagerpc.KeyNotFound
+		ss.keyLocks[key] <- 1
+
 		return nil
 	}
 }

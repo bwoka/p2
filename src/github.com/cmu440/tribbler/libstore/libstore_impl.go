@@ -57,7 +57,7 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 		if try == 5 {
 			return nil, err
 		}
-		time.Sleep(time.Millisecond * 250)
+		time.Sleep(time.Second)
 	}
 	var args storagerpc.GetServersArgs
 	var reply storagerpc.GetServersReply
@@ -75,7 +75,7 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 			if i == 5 {
 				return nil, errors.New("Couldn't connect to storage server")
 			}
-			time.Sleep(time.Millisecond * 250)
+			time.Sleep(time.Second)
 		}
 	}
 	// Create libstore and save the connection to the master server
