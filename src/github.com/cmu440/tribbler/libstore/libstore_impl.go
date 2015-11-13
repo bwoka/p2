@@ -99,6 +99,12 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	ls.mode = mode
 	ls.servers = servers
 	ls.clients = clients
+	ls.cacheGet = make(map[string]string) // maps key to result
+	ls.cacheValid = make(map[string]bool)
+	ls.cacheList = make(map[string][]string)
+	ls.cacheTimes = make(map[string][]time.Time)
+	ls.cacheRecent = make(map[string]int)
+
 	return ls, nil
 
 	// So it won't yell at me for fmt
@@ -108,14 +114,23 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 
 func (ls *libstore) Get(key string) (string, error) {
 	wlease := false
+	if _, ok := ls.cacheValid[key]; ok {
+		ls.cacheValid[key]=false
+	}
+
 	if ls.cacheValid[key] {
 		if val, ok := ls.cacheGet[key]; ok {
 			return ls.cacheGet[val], nil
 		}
 	} else {
+		if _, ok := ls.cacheTimes[key]; !ok {
+			ls.cacheTimes[key]=make([]time.Time,storagerpc.QueryCacheThresh)
+			ls.cacheRecent[key]=0
+		}
+
 		now := time.Now()
 
-		if time.Now().Unix()-ls.cacheTimes[key][ls.cacheRecent[key]].Unix() <= storagerpc.QueryCacheSeconds {
+		 if ls.cacheTimes[key][ls.cacheRecent[key]]!=nil && now.Unix()-ls.cacheTimes[key][ls.cacheRecent[key]].Unix() <= storagerpc.QueryCacheSeconds {
 			wlease = true
 		}
 
