@@ -130,7 +130,7 @@ func (ls *libstore) Get(key string) (string, error) {
 
 		now := time.Now()
 
-		 if ls.cacheTimes[key][ls.cacheRecent[key]]!=nil && now.Unix()-ls.cacheTimes[key][ls.cacheRecent[key]].Unix() <= storagerpc.QueryCacheSeconds {
+		 if now.Unix()-ls.cacheTimes[key][ls.cacheRecent[key]].Unix() <= storagerpc.QueryCacheSeconds {
 			wlease = true
 		}
 
@@ -140,7 +140,6 @@ func (ls *libstore) Get(key string) (string, error) {
 		if ls.cacheRecent[key] == len(ls.cacheTimes[key]) {
 			ls.cacheRecent[key] = 0
 		}
-
 	}
 
 	args := &storagerpc.GetArgs{Key: key, WantLease: wlease}
@@ -189,11 +188,50 @@ func (ls *libstore) Delete(key string) error {
 }
 
 func (ls *libstore) GetList(key string) ([]string, error) {
+	wlease := false
+	if _, ok := ls.cacheValid[key]; ok {
+		ls.cacheValid[key]=false
+	}
+
+	if ls.cacheValid[key] {
+		if val, ok := ls.cacheList[key]; ok {
+			return ls.cacheList[val], nil
+		}
+	} else {
+		if _, ok := ls.cacheTimes[key]; !ok {
+			ls.cacheTimes[key]=make([]time.Time,storagerpc.QueryCacheThresh)
+			ls.cacheRecent[key]=0
+		}
+
+		now := time.Now()
+
+		 if now.Unix()-ls.cacheTimes[key][ls.cacheRecent[key]].Unix() <= storagerpc.QueryCacheSeconds {
+			wlease = true
+		}
+
+		//here we update the cacheTimes
+		ls.cacheTimes[key][ls.cacheRecent[key]] = now
+		ls.cacheRecent[key] += 1
+		if ls.cacheRecent[key] == len(ls.cacheTimes[key]) {
+			ls.cacheRecent[key] = 0
+		}
+	}
+
+
+
 	args := &storagerpc.GetArgs{Key: key}
 	var reply storagerpc.GetListReply
 	client := getConnection(ls, getStorageServerIndex(ls, key))
 	client.Call("StorageServer.GetList", args, &reply)
 	if reply.Status == storagerpc.OK {
+
+		if wlease {
+			ls.cacheValid[key] = true
+		}
+		if ls.cacheValid[key] {
+			ls.cacheList[key] = reply.Value
+		}
+
 		return reply.Value, nil
 	} else {
 		return nil, errors.New("Key does not exist")
