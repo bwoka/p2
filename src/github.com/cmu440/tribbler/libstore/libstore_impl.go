@@ -14,11 +14,11 @@ type libstore struct {
 	mode       LeaseMode
 	servers    []storagerpc.Node // The list of servers
 	clients    []*rpc.Client     // List of ongoing connections to servers
-	cacheGet map[string]string // maps key to result
+	cacheGet   map[string]string // maps key to result
 	cacheValid map[string]bool
-	cacheList map[string][]string
+	cacheList  map[string][]string
 
-	cacheTimes map[string][]Time
+	cacheTimes  map[string][]time.Time
 	cacheRecent map[string]int
 }
 
@@ -106,25 +106,24 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	return nil, nil
 }
 
-
 func (ls *libstore) Get(key string) (string, error) {
-	wlease:=false
-	if ls.cacheValid[key]{
-		if val,ok:=cacheGet[key];ok{
+	wlease := false
+	if ls.cacheValid[key] {
+		if val, ok := ls.cacheGet[key]; ok {
 			return ls.cacheGet[val], nil
 		}
-	}else{
-		now:=time.Now()
+	} else {
+		now := time.Now()
 
-		if now.Unix-cacheTimes[key][cacheRecent[key]].Unix <= storagerpc.QueryCacheSeconds{
-			wlease=true
+		if time.Now().Unix()-ls.cacheTimes[key][ls.cacheRecent[key]].Unix() <= storagerpc.QueryCacheSeconds {
+			wlease = true
 		}
-	
+
 		//here we update the cacheTimes
-		cacheTimes[key][cacheRecent[key]]=now
-		cacheRecent[key]+=1
-		if cacheRecent[key]==len(cacheTimes[key]){
-			cacheRecent[key]=0
+		ls.cacheTimes[key][ls.cacheRecent[key]] = now
+		ls.cacheRecent[key] += 1
+		if ls.cacheRecent[key] == len(ls.cacheTimes[key]) {
+			ls.cacheRecent[key] = 0
 		}
 
 	}
@@ -135,11 +134,11 @@ func (ls *libstore) Get(key string) (string, error) {
 	client.Call("StorageServer.Get", args, &reply)
 
 	if reply.Status == storagerpc.OK {
-		if wlease{
-			cacheValid[key]=true
+		if wlease {
+			ls.cacheValid[key] = true
 		}
-		if cacheValid{
-			cacheGet[key]=reply.Value
+		if ls.cacheValid[key] {
+			ls.cacheGet[key] = reply.Value
 		}
 		return reply.Value, nil
 	} else {
@@ -213,16 +212,16 @@ func (ls *libstore) AppendToList(key, newItem string) error {
 }
 
 func (ls *libstore) RevokeLease(args *storagerpc.RevokeLeaseArgs, reply *storagerpc.RevokeLeaseReply) error {
-	toRemove:=args.Key
-	if !cacheValid[key]{
-		delete(cacheGet,key)
-		delete(cacheList,key)
-		reply.Status=storagerpc.KeyNotFound
+	key := args.Key
+	if !ls.cacheValid[key] {
+		delete(ls.cacheGet, key)
+		delete(ls.cacheList, key)
+		reply.Status = storagerpc.KeyNotFound
 	}
-	cacheValid[key]=false
-	delete(cacheGet,key)
-	delete(cacheList,key)
-	reply.Status=storagerpc.OK
+	ls.cacheValid[key] = false
+	delete(ls.cacheGet, key)
+	delete(ls.cacheList, key)
+	reply.Status = storagerpc.OK
 	return nil
 }
 
