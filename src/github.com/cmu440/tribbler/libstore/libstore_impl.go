@@ -14,6 +14,12 @@ type libstore struct {
 	mode       LeaseMode
 	servers    []storagerpc.Node // The list of servers
 	clients    []*rpc.Client     // List of ongoing connections to servers
+	cacheGet map[string]string // maps key to result
+	cacheValid map[string]bool
+	cacheList map[string][]string
+
+	cacheTimes map[string][]Time
+	cacheRecent map[string]int
 }
 
 // NewLibstore creates a new instance of a TribServer's libstore. masterServerHostPort
@@ -100,13 +106,41 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	return nil, nil
 }
 
-func (ls *libstore) Get(key string) (string, error) {
 
-	args := &storagerpc.GetArgs{Key: key}
+func (ls *libstore) Get(key string) (string, error) {
+	wlease:=false
+	if ls.cacheValid[key]{
+		if val,ok:=cacheGet[key];ok{
+			return ls.cacheGet[val], nil
+		}
+	}else{
+		now:=time.Now()
+
+		if now.Unix-cacheTimes[key][cacheRecent[key]].Unix <= storagerpc.QueryCacheSeconds{
+			wlease=true
+		}
+	
+		//here we update the cacheTimes
+		cacheTimes[key][cacheRecent[key]]=now
+		cacheRecent[key]+=1
+		if cacheRecent[key]==len(cacheTimes[key]){
+			cacheRecent[key]=0
+		}
+
+	}
+
+	args := &storagerpc.GetArgs{Key: key, WantLease: wlease}
 	var reply storagerpc.GetReply
 	client := getConnection(ls, getStorageServerIndex(ls, key))
 	client.Call("StorageServer.Get", args, &reply)
+
 	if reply.Status == storagerpc.OK {
+		if wlease{
+			cacheValid[key]=true
+		}
+		if cacheValid{
+			cacheGet[key]=reply.Value
+		}
 		return reply.Value, nil
 	} else {
 		return "", errors.New("Key does not exist")
@@ -179,7 +213,17 @@ func (ls *libstore) AppendToList(key, newItem string) error {
 }
 
 func (ls *libstore) RevokeLease(args *storagerpc.RevokeLeaseArgs, reply *storagerpc.RevokeLeaseReply) error {
-	return errors.New("not implemented")
+	toRemove:=args.Key
+	if !cacheValid[key]{
+		delete(cacheGet,key)
+		delete(cacheList,key)
+		reply.Status=storagerpc.KeyNotFound
+	}
+	cacheValid[key]=false
+	delete(cacheGet,key)
+	delete(cacheList,key)
+	reply.Status=storagerpc.OK
+	return nil
 }
 
 func getStorageServerIndex(ls *libstore, key string) int {
