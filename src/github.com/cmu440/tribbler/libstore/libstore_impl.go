@@ -10,14 +10,14 @@ import (
 )
 
 type libstore struct {
-	myHostPort string
-	mode       LeaseMode
-	servers    []storagerpc.Node // The list of servers
-	clients    []*rpc.Client     // List of ongoing connections to servers
-	cacheGet   map[string]string // maps key to result
-	cacheValid map[string]bool
-	cacheList  map[string][]string
-	leaseMode LeaseMode
+	myHostPort  string
+	mode        LeaseMode
+	servers     []storagerpc.Node // The list of servers
+	clients     []*rpc.Client     // List of ongoing connections to servers
+	cacheGet    map[string]string // maps key to result
+	cacheValid  map[string]bool
+	cacheList   map[string][]string
+	leaseMode   LeaseMode
 	cacheTimes  map[string][]time.Time
 	cacheRecent map[string]int
 }
@@ -113,7 +113,7 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 }
 
 func (ls *libstore) Get(key string) (string, error) {
-	if ls.leaseMode==Never{
+	if ls.leaseMode == Never {
 		args := &storagerpc.GetArgs{Key: key}
 		var reply storagerpc.GetReply
 		client := getConnection(ls, getStorageServerIndex(ls, key))
@@ -123,25 +123,25 @@ func (ls *libstore) Get(key string) (string, error) {
 		} else {
 			return "", errors.New("Key does not exist")
 		}
-	}else{
+	} else {
 		wlease := false
 		if _, ok := ls.cacheValid[key]; ok {
-			ls.cacheValid[key]=false
+			ls.cacheValid[key] = false
 		}
 
 		if ls.cacheValid[key] {
 			if val, ok := ls.cacheGet[key]; ok {
 				return ls.cacheGet[val], nil
 			}
-		} else if ls.leaseMode==Normal{
+		} else if ls.leaseMode == Normal {
 			if _, ok := ls.cacheTimes[key]; !ok {
-				ls.cacheTimes[key]=make([]time.Time,storagerpc.QueryCacheThresh)
-				ls.cacheRecent[key]=0
+				ls.cacheTimes[key] = make([]time.Time, storagerpc.QueryCacheThresh)
+				ls.cacheRecent[key] = 0
 			}
 
 			now := time.Now()
 
-			 if now.Unix()-ls.cacheTimes[key][ls.cacheRecent[key]].Unix() <= storagerpc.QueryCacheSeconds {
+			if now.Unix()-ls.cacheTimes[key][ls.cacheRecent[key]].Unix() <= storagerpc.QueryCacheSeconds {
 				wlease = true
 			}
 
@@ -151,8 +151,11 @@ func (ls *libstore) Get(key string) (string, error) {
 			if ls.cacheRecent[key] == len(ls.cacheTimes[key]) {
 				ls.cacheRecent[key] = 0
 			}
-		}else{
-			wlease=true
+		} else {
+			wlease = true
+		}
+		if ls.leaseMode == Always {
+			wlease = true
 		}
 
 		args := &storagerpc.GetArgs{Key: key, WantLease: wlease}
@@ -172,11 +175,7 @@ func (ls *libstore) Get(key string) (string, error) {
 			return "", errors.New("Key does not exist")
 		}
 
-
-
-
 	}
-
 
 }
 
@@ -208,7 +207,7 @@ func (ls *libstore) Delete(key string) error {
 }
 
 func (ls *libstore) GetList(key string) ([]string, error) {
-	if ls.leaseMode=Never{
+	if ls.leaseMode == Never {
 		args := &storagerpc.GetArgs{Key: key}
 		var reply storagerpc.GetListReply
 		client := getConnection(ls, getStorageServerIndex(ls, key))
@@ -218,25 +217,25 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 		} else {
 			return nil, errors.New("Key does not exist")
 		}
-	}else{
+	} else {
 		wlease := false
 		if _, ok := ls.cacheValid[key]; ok {
-			ls.cacheValid[key]=false
+			ls.cacheValid[key] = false
 		}
 
 		if ls.cacheValid[key] {
-			if val, ok := ls.cacheList[key]; ok {
-				return ls.cacheList[val], nil
+			if _, ok := ls.cacheList[key]; ok {
+				return ls.cacheList[key], nil
 			}
-		} else if ls.leaseMode=Normal {
+		} else if ls.leaseMode == Normal {
 			if _, ok := ls.cacheTimes[key]; !ok {
-				ls.cacheTimes[key]=make([]time.Time,storagerpc.QueryCacheThresh)
-				ls.cacheRecent[key]=0
+				ls.cacheTimes[key] = make([]time.Time, storagerpc.QueryCacheThresh)
+				ls.cacheRecent[key] = 0
 			}
 
 			now := time.Now()
 
-			 if now.Unix()-ls.cacheTimes[key][ls.cacheRecent[key]].Unix() <= storagerpc.QueryCacheSeconds {
+			if now.Unix()-ls.cacheTimes[key][ls.cacheRecent[key]].Unix() <= storagerpc.QueryCacheSeconds {
 				wlease = true
 			}
 
@@ -246,13 +245,14 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 			if ls.cacheRecent[key] == len(ls.cacheTimes[key]) {
 				ls.cacheRecent[key] = 0
 			}
-		} else{
-			wlease=true
+		} else {
+			wlease = true
+		}
+		if ls.leaseMode == Always {
+			wlease = true
 		}
 
-
-
-		args := &storagerpc.GetArgs{Key: key}
+		args := &storagerpc.GetArgs{Key: key, WantLease: wlease}
 		var reply storagerpc.GetListReply
 		client := getConnection(ls, getStorageServerIndex(ls, key))
 		client.Call("StorageServer.GetList", args, &reply)
